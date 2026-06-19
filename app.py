@@ -164,10 +164,14 @@ if len(valid_field_runners) >= 2:
     
     editor_key = f"matrix_editor_{today_going}_{race_rating_band}_{len(valid_field_runners)}"
     
+    # Render with custom column display configuration alias
     edited_matrix_df = st.data_editor(
         styled_df,
         use_container_width=True,
         disabled=["horse", "jockey", "rating_band", "ran"],
+        column_config={
+            "wgt": "carry_wgt(lbs)"
+        },
         key=editor_key
     )
 
