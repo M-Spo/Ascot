@@ -32,20 +32,32 @@ model, lookup = load_production_assets()
 if lookup is not None:
     all_horses = sorted(lookup['horse'].dropna().astype(str).str.strip().unique())
     all_jockeys = sorted(lookup['jockey'].dropna().astype(str).str.strip().unique())
+    
+    # Extract historical going types dynamically from dataset column names
+    going_cols = [col for col in lookup.columns if col.startswith('prev_') and col.endswith('_performance')]
+    unique_goings_list = [col.replace('prev_', '').replace('_performance', '') for col in going_cols]
+    if not unique_goings_list:
+        unique_goings_list = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
+        
     if 'rating_band' in lookup.columns:
         all_rating_bands = sorted(lookup['rating_band'].dropna().astype(str).str.strip().unique())
     else:
-        all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Group 1", "Group 2", "Group 3"]
+        all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
 else:
     all_horses = []
     all_jockeys = []
     all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
+    unique_goings_list = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
 
 # =====================================================================
 # 2. RACE CONFIGURATION (SIDEBAR REPLACEMENT WITH AUTOCOMPLETE)
 # =====================================================================
 st.sidebar.header("⚙️ Race Day Configuration")
 
+# Track Going is back to calculate 'historical_going_performance'
+today_going = st.sidebar.selectbox("Track Going Status", unique_goings_list)
+
+# Rating Band autocomplete
 race_rating_band = st.sidebar.selectbox(
     "Search Rating Band", 
     options=[""] + all_rating_bands, 
@@ -89,7 +101,7 @@ valid_field_runners = [r for r in runners_input_list if r["horse"] and r["jockey
 
 if len(valid_field_runners) >= 2:
     st.header("📊 Race Feature Matrix Verification")
-    st.write("Review the fetched features below. **Any blanks (None/NaN) are highlighted in red**—type live market values or overrides directly into the cells.")
+    st.write("Review features below. **Blanks are highlighted in red**—type overrides or missing values directly into cells.")
     
     feature_cols = [
         'horse', 'jockey', 'rating_band', 'ran', 'age', 'wgt', 'or', 'bookie_prob',
@@ -99,36 +111,37 @@ if len(valid_field_runners) >= 2:
     
     compiled_rows = []
     for runner in valid_field_runners:
-        # Step 1: Look up the horse's core record independently
         horse_match = lookup[lookup['horse'] == runner["horse"]]
-        # Step 2: Look up the jockey's core record independently
         jockey_match = lookup[lookup['jockey'] == runner["jockey"]]
         
         row_data = {'horse': runner["horse"], 'jockey': runner["jockey"]}
         
-        # Pull historical horse features
+        # Pull horse records
         if not horse_match.empty:
             h_row = horse_match.iloc[0]
-            for col in ['age', 'wgt', 'or', 'prev_avg_performance', 'horse_hot_streak', 'historical_going_performance']:
+            for col in ['age', 'wgt', 'or', 'prev_avg_performance', 'horse_hot_streak']:
                 if col in h_row:
                     row_data[col] = h_row[col]
+            
+            # Use the Track Going selection to dynamically set historical_going_performance
+            target_going_col = f"prev_{today_going}_performance"
+            if target_going_col in h_row and not pd.isna(h_row[target_going_col]):
+                row_data['historical_going_performance'] = h_row[target_going_col]
+            else:
+                row_data['historical_going_performance'] = h_row.get('prev_avg_performance', np.nan)
                     
-        # Pull historical jockey features
+        # Pull jockey records
         if not jockey_match.empty:
             j_row = jockey_match.iloc[0]
             for col in ['jockey_prev_avg_performance', 'jockey_hot_streak']:
                 if col in j_row:
                     row_data[col] = j_row[col]
                     
-        # Set global race controls
+        # Global inputs
         row_data['rating_band'] = race_rating_band
         row_data['ran'] = race_ran
-        
-        # Explicitly leave live track metrics like bookie probability empty for manual input
-        if 'bookie_prob' not in row_data or pd.isna(row_data['bookie_prob']):
-            row_data['bookie_prob'] = np.nan
+        row_data['bookie_prob'] = np.nan
             
-        # Ensure structural safety keys
         for col in feature_cols:
             if col not in row_data:
                 row_data[col] = np.nan
@@ -143,7 +156,6 @@ if len(valid_field_runners) >= 2:
             return 'background-color: #ffcccc; color: black;'
         return ''
         
-    # FIX: Swapped .applymap() to modern .map() to avoid crash errors
     styled_df = initial_matrix_df.style.map(
         highlight_missing, 
         subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]
@@ -176,8 +188,6 @@ if len(valid_field_runners) >= 2:
                     processing_df[col] = 0.5
                     
             matrix_inference_ready = processing_df[model_expected_features]
-            
-            # Prediction call on raw booster values array
             raw_model_predictions = model.booster_.predict(matrix_inference_ready.values)
             
             scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
