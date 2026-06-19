@@ -170,7 +170,8 @@ if len(valid_field_runners) >= 2:
         use_container_width=True,
         disabled=["horse", "jockey", "rating_band", "ran"],
         column_config={
-            "wgt": "carry_wgt(lbs)"
+            "wgt": "carry_wgt(lbs)",
+            "bookie_prob" : "bookie_win"
         },
         key=editor_key
     )
