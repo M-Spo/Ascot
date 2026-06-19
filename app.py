@@ -139,12 +139,23 @@ if st.button("🔮 Evaluate Competitor Field Ranks"):
             
         race_day_matrix = pd.concat(field_feature_rows, ignore_index=True)
         
+        # Isolate clean features matching training constraints
         going_cols_to_drop = [f"prev_{g}_performance" for g in unique_goings_list]
         drop_cols_list = ['horse', 'jockey', 'inverted_rank'] + going_cols_to_drop
         
-        feature_columns_final = [col for col in race_day_matrix.columns if col not in drop_cols_list]
-        matrix_inference_ready = race_day_matrix[feature_columns_final]
+        # --- FIX: Dynamically align features with the trained model's exact signature ---
+        # Get the exact list of features the model was trained on
+        model_expected_features = model.feature_name_
         
+        # Ensure any missing expected columns are filled with 0.5 baseline defaults
+        for col in model_expected_features:
+            if col not in race_day_matrix.columns:
+                race_day_matrix[col] = 0.5
+                
+        # Force the inference matrix to match the model's feature names and exact order
+        matrix_inference_ready = race_day_matrix[model_expected_features]
+        
+        # Run prediction using the pure booster array
         raw_model_predictions = model.booster_.predict(matrix_inference_ready.values)
         
         scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
