@@ -126,7 +126,6 @@ if len(valid_field_runners) >= 2:
             # Use the Track Going selection to dynamically set historical_going_performance
             target_going_col = f"prev_{today_going}_performance"
             
-            # Explicitly check if the column exists and isn't empty
             if target_going_col in h_row.index and pd.notna(h_row[target_going_col]):
                 row_data['historical_going_performance'] = h_row[target_going_col]
             else:
@@ -163,8 +162,6 @@ if len(valid_field_runners) >= 2:
         subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]
     )
     
-    # FIX: The key is now dynamically tied to the sidebar choices. 
-    # When you change the going, the table is forced to refresh the visible numbers!
     editor_key = f"matrix_editor_{today_going}_{race_rating_band}_{len(valid_field_runners)}"
     
     edited_matrix_df = st.data_editor(
@@ -189,24 +186,19 @@ if len(valid_field_runners) >= 2:
                 
             model_expected_features = model.feature_name_
             
-            # Fill missing required training columns with zero-baselines
             for col in model_expected_features:
                 if col not in processing_df.columns:
                     processing_df[col] = 0.5
                     
-            # Safely copy to avoid pandas warnings
             matrix_inference_ready = processing_df[model_expected_features].copy()
             
-            # --- THE FIX: Format categories and numbers properly ---
+            # Formats categories and objects securely for scikit-learn/LGBM
             for col in matrix_inference_ready.columns:
                 if matrix_inference_ready[col].dtype == 'object' or isinstance(matrix_inference_ready[col].iloc[0], str):
-                    # Tell LightGBM this text is an official categorical feature (e.g., Rating Band)
                     matrix_inference_ready[col] = matrix_inference_ready[col].astype('category')
                 else:
-                    # Force all other numerical stats to be strict floats
                     matrix_inference_ready[col] = pd.to_numeric(matrix_inference_ready[col], errors='coerce').fillna(0.5)
             
-            # Run prediction by passing the native Pandas DataFrame (Drop the .values!)
             raw_model_predictions = model.booster_.predict(matrix_inference_ready)
             
             scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
@@ -231,5 +223,32 @@ if len(valid_field_runners) >= 2:
             
             st.subheader("🏁 Official Model Forecast Leaderboard")
             st.dataframe(leaderboard_df, use_container_width=True)
+
 else:
     st.info("💡 Please pick at least 2 autocomplete runner pairs above to generate the interactive feature spreadsheet.")
+
+# =====================================================================
+# 6. FRACTION ODDS TO PROBABILITY PERCENTAGE CONVERTER
+# =====================================================================
+st.markdown("---")
+st.header("🧮 Bookie Fraction Converter")
+st.write("Type in the bookmaker fractional odds (e.g., **4 / 1** or **13 / 8**) to quickly get the probability value for your table.")
+
+calc_col1, calc_col2, calc_col3 = st.columns([2, 1, 3])
+
+with calc_col1:
+    numerator = st.number_input("Numerator (Top Number)", value=4, min_value=1, step=1, key="calc_num")
+with calc_col2:
+    st.markdown("<h3 style='text-align: center; margin-top: 25px;'>/</h3>", unsafe_allow_html=True)
+with calc_col3:
+    denominator = st.number_input("Denominator (Bottom Number)", value=1, min_value=1, step=1, key="calc_den")
+
+# Probability math execution
+implied_prob_decimal = denominator / (numerator + denominator)
+implied_prob_percentage = implied_prob_decimal * 100
+
+st.metric(
+    label="⚡ Target Value for 'bookie_prob' Column", 
+    value=f"{implied_prob_decimal:.3f}  ({implied_prob_percentage:.1f}%)",
+    help="Plug the decimal value directly into the red 'bookie_prob' row cells above."
+)
