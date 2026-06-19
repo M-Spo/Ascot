@@ -28,11 +28,20 @@ def load_production_assets():
 
 model, lookup = load_production_assets()
 
+# Pre-process unique sorted lists for the autocomplete dropdowns
+if lookup is not None:
+    # Get unique names, strip whitespace, drop NaNs, and sort alphabetically
+    all_horses = sorted(lookup['horse'].dropna().astype(str).str.strip().unique())
+    all_jockeys = sorted(lookup['jockey'].dropna().astype(str).str.strip().unique())
+else:
+    all_horses = []
+    all_jockeys = []
+
 # =====================================================================
 # 2. APP CONFIGURATION & APP HEADER
 # =====================================================================
 st.title("🏇 Ascot Multi-Horse Field Ranker")
-st.write("Input multiple runners simultaneously to calculate field rankings and absolute confidence percentages.")
+st.write("Type a few letters of a horse or jockey name to search, select to autocomplete, and calculate field rankings.")
 
 # --- SIDEBAR CONFIGURATION ---
 st.sidebar.header("⚙️ Race Conditions")
@@ -48,7 +57,7 @@ else:
 today_going = st.sidebar.selectbox("Track Going Status", unique_goings_list)
 
 # =====================================================================
-# 3. DYNAMIC MULTI-HORSE FIELDS GENERATOR
+# 3. DYNAMIC MULTI-HORSE FIELDS GENERATOR WITH AUTOCOMPLETE
 # =====================================================================
 st.header("📋 Field Entry Profile Selection")
 
@@ -69,9 +78,21 @@ for i in range(st.session_state.num_runners):
     r_col1, r_col2, r_col3 = st.columns(3)
     
     with r_col1:
-        h_name = st.text_input(f"Horse Name", key=f"horse_input_{i}").strip()
+        # Searchable selectbox for horses with an empty default state
+        h_name = st.selectbox(
+            f"Search Horse Name", 
+            options=[""] + all_horses, 
+            index=0, 
+            key=f"horse_input_{i}"
+        ).strip()
     with r_col2:
-        j_name = st.text_input(f"Jockey Name", key=f"jockey_input_{i}").strip()
+        # Searchable selectbox for jockeys with an empty default state
+        j_name = st.selectbox(
+            f"Search Jockey Name", 
+            options=[""] + all_jockeys, 
+            index=0, 
+            key=f"jockey_input_{i}"
+        ).strip()
     with r_col3:
         wgt_lbs = st.number_input(f"Carried Weight (lbs)", value=130.0, step=0.5, key=f"weight_input_{i}")
         
@@ -81,6 +102,7 @@ for i in range(st.session_state.num_runners):
 # 4. MATH INFERENCE AND FORECAST LEADERBOARD
 # =====================================================================
 if st.button("🔮 Evaluate Competitor Field Ranks"):
+    # Filter down to fields that are actually filled out
     valid_field_runners = [r for r in runners_input_list if r["horse"] and r["jockey"]]
     field_size = len(valid_field_runners)
     
