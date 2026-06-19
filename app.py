@@ -32,7 +32,6 @@ model, lookup = load_production_assets()
 if lookup is not None:
     all_horses = sorted(lookup['horse'].dropna().astype(str).str.strip().unique())
     all_jockeys = sorted(lookup['jockey'].dropna().astype(str).str.strip().unique())
-    # Grab unique rating bands from the dataset if they exist, fallback if not
     if 'rating_band' in lookup.columns:
         all_rating_bands = sorted(lookup['rating_band'].dropna().astype(str).str.strip().unique())
     else:
@@ -45,12 +44,8 @@ else:
 # =====================================================================
 # 2. RACE CONFIGURATION (SIDEBAR REPLACEMENT WITH AUTOCOMPLETE)
 # =====================================================================
-st.title("🏇 Ascot Multi-Horse Field Ranker")
-st.write("Select your runners to review/edit their historical stats, then run the ranking model.")
-
 st.sidebar.header("⚙️ Race Day Configuration")
 
-# Rating Band now uses a searchable selectbox for autocomplete
 race_rating_band = st.sidebar.selectbox(
     "Search Rating Band", 
     options=[""] + all_rating_bands, 
@@ -94,9 +89,8 @@ valid_field_runners = [r for r in runners_input_list if r["horse"] and r["jockey
 
 if len(valid_field_runners) >= 2:
     st.header("📊 Race Feature Matrix Verification")
-    st.write("Review the fetched features below. **Any blanks (NaN) are highlighted**—you can type directly into the cells to fill them in before predicting.")
+    st.write("Review the fetched features below. **Any blanks (None/NaN) are highlighted in red**—type live market values or overrides directly into the cells.")
     
-    # Define exact tracking feature columns requested
     feature_cols = [
         'horse', 'jockey', 'rating_band', 'ran', 'age', 'wgt', 'or', 'bookie_prob',
         'prev_avg_performance', 'horse_hot_streak', 'jockey_prev_avg_performance',
@@ -105,37 +99,58 @@ if len(valid_field_runners) >= 2:
     
     compiled_rows = []
     for runner in valid_field_runners:
-        match = lookup[(lookup['horse'] == runner["horse"]) & (lookup['jockey'] == runner["jockey"])]
+        # Step 1: Look up the horse's core record independently
+        horse_match = lookup[lookup['horse'] == runner["horse"]]
+        # Step 2: Look up the jockey's core record independently
+        jockey_match = lookup[lookup['jockey'] == runner["jockey"]]
         
-        if not match.empty:
-            row_data = match.copy().iloc[0].to_dict()
-        else:
-            row_data = {'horse': runner["horse"], 'jockey': runner["jockey"]}
-            
-        # Inject the global sidebar variables
+        row_data = {'horse': runner["horse"], 'jockey': runner["jockey"]}
+        
+        # Pull historical horse features
+        if not horse_match.empty:
+            h_row = horse_match.iloc[0]
+            for col in ['age', 'wgt', 'or', 'prev_avg_performance', 'horse_hot_streak', 'historical_going_performance']:
+                if col in h_row:
+                    row_data[col] = h_row[col]
+                    
+        # Pull historical jockey features
+        if not jockey_match.empty:
+            j_row = jockey_match.iloc[0]
+            for col in ['jockey_prev_avg_performance', 'jockey_hot_streak']:
+                if col in j_row:
+                    row_data[col] = j_row[col]
+                    
+        # Set global race controls
         row_data['rating_band'] = race_rating_band
         row_data['ran'] = race_ran
         
-        # Ensure every requested feature column exists in the row dict (leave empty if missing)
+        # Explicitly leave live track metrics like bookie probability empty for manual input
+        if 'bookie_prob' not in row_data or pd.isna(row_data['bookie_prob']):
+            row_data['bookie_prob'] = np.nan
+            
+        # Ensure structural safety keys
         for col in feature_cols:
             if col not in row_data:
                 row_data[col] = np.nan
                 
-        # Filter down strictly to requested schema keys
         filtered_row = {col: row_data[col] for col in feature_cols}
         compiled_rows.append(filtered_row)
         
     initial_matrix_df = pd.DataFrame(compiled_rows)
     
-    # Highlight missing data blocks beautifully for visual auditing
     def highlight_missing(val):
-        if pd.isna(val) or val == "":
+        if pd.isna(val) or val == "" or val is None:
             return 'background-color: #ffcccc; color: black;'
         return ''
         
-    # Render editable table on-screen so missing values can be typed into directly
+    # FIX: Swapped .applymap() to modern .map() to avoid crash errors
+    styled_df = initial_matrix_df.style.map(
+        highlight_missing, 
+        subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]
+    )
+    
     edited_matrix_df = st.data_editor(
-        initial_matrix_df.style.map(highlight_missing, subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]),
+        styled_df,
         use_container_width=True,
         disabled=["horse", "jockey", "rating_band", "ran"],
         key="feature_matrix_editor"
@@ -148,38 +163,30 @@ if len(valid_field_runners) >= 2:
         if model is None:
             st.error("🚨 Missing production asset dependencies.")
         else:
-            # Copy edited matrix and fill any remaining unaddressed blanks with baseline safety values
             processing_df = edited_matrix_df.copy()
             
-            # Simple conversion to handle text inputs as numbers
             numeric_cols = [c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band']]
             for col in numeric_cols:
                 processing_df[col] = pd.to_numeric(processing_df[col]).fillna(0.5)
                 
-            # Align columns perfectly with what your trained LightGBM model specifies
             model_expected_features = model.feature_name_
             
-            # Fill missing required training columns with zero-baselines if they aren't part of our editable set
             for col in model_expected_features:
                 if col not in processing_df.columns:
                     processing_df[col] = 0.5
                     
-            # Force exact layout order required by LightGBM C++ code
             matrix_inference_ready = processing_df[model_expected_features]
             
-            # Run prediction using the pure booster engine
+            # Prediction call on raw booster values array
             raw_model_predictions = model.booster_.predict(matrix_inference_ready.values)
             
-            # Softmax distribution mapping for Win Chance (#1)
             scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
             exponential_values = np.exp(scaled_logits)
             win_probabilities_distribution = exponential_values / np.sum(exponential_values)
             
-            # Top-3 Place Probability Proxy Estimation
             placing_scale_factor = min(3.0, len(valid_field_runners))
             top3_probabilities_distribution = np.clip(win_probabilities_distribution * placing_scale_factor, 0.0, 0.99)
             
-            # Construct summary display leaderboard frame
             display_names = [f"{r['horse'].upper()} / {r['jockey']}" for _, r in processing_df.iterrows()]
             leaderboard_df = pd.DataFrame({
                 "🎯 Predicted Rank": 0,
@@ -189,7 +196,6 @@ if len(valid_field_runners) >= 2:
                 "_sorting_metric": win_probabilities_distribution  
             })
             
-            # Sort values cleanly down by highest win percentage
             leaderboard_df = leaderboard_df.sort_values(by="_sorting_metric", ascending=False).reset_index(drop=True)
             leaderboard_df["🎯 Predicted Rank"] = leaderboard_df.index + 1
             leaderboard_df = leaderboard_df.drop(columns=["_sorting_metric"])
