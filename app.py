@@ -120,12 +120,14 @@ if len(valid_field_runners) >= 2:
         if not horse_match.empty:
             h_row = horse_match.iloc[0]
             for col in ['age', 'wgt', 'or', 'prev_avg_performance', 'horse_hot_streak']:
-                if col in h_row:
+                if col in h_row.index:
                     row_data[col] = h_row[col]
             
             # Use the Track Going selection to dynamically set historical_going_performance
             target_going_col = f"prev_{today_going}_performance"
-            if target_going_col in h_row and not pd.isna(h_row[target_going_col]):
+            
+            # Explicitly check if the column exists and isn't empty
+            if target_going_col in h_row.index and pd.notna(h_row[target_going_col]):
                 row_data['historical_going_performance'] = h_row[target_going_col]
             else:
                 row_data['historical_going_performance'] = h_row.get('prev_avg_performance', np.nan)
@@ -134,7 +136,7 @@ if len(valid_field_runners) >= 2:
         if not jockey_match.empty:
             j_row = jockey_match.iloc[0]
             for col in ['jockey_prev_avg_performance', 'jockey_hot_streak']:
-                if col in j_row:
+                if col in j_row.index:
                     row_data[col] = j_row[col]
                     
         # Global inputs
@@ -161,11 +163,15 @@ if len(valid_field_runners) >= 2:
         subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]
     )
     
+    # FIX: The key is now dynamically tied to the sidebar choices. 
+    # When you change the going, the table is forced to refresh the visible numbers!
+    editor_key = f"matrix_editor_{today_going}_{race_rating_band}_{len(valid_field_runners)}"
+    
     edited_matrix_df = st.data_editor(
         styled_df,
         use_container_width=True,
         disabled=["horse", "jockey", "rating_band", "ran"],
-        key="feature_matrix_editor"
+        key=editor_key
     )
 
     # =====================================================================
