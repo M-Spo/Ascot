@@ -28,10 +28,21 @@ def load_production_assets():
 
 model, lookup = load_production_assets()
 
-# Pre-process unique sorted lists for the autocomplete dropdowns
+# Pre-process unique sorted lists and fast indexed dictionary mappings
 if lookup is not None:
-    all_horses = sorted(lookup['horse'].dropna().astype(str).str.strip().unique())
-    all_jockeys = sorted(lookup['jockey'].dropna().astype(str).str.strip().unique())
+    # ⚡ SPEED FIX: Clean whitespaces once across the dataframe
+    if 'horse' in lookup.columns:
+        lookup['horse'] = lookup['horse'].astype(str).str.strip()
+    if 'jockey' in lookup.columns:
+        lookup['jockey'] = lookup['jockey'].astype(str).str.strip()
+
+    all_horses = sorted(lookup['horse'].dropna().unique())
+    all_jockeys = sorted(lookup['jockey'].dropna().unique())
+    
+    # ⚡ SPEED FIX: Convert lookups into indexed structures for instantaneous row extraction
+    # This prevents the app from scanning the full dataframe inside the runner loop
+    horse_fast_lookup = lookup.drop_duplicates(subset=['horse']).set_index('horse')
+    jockey_fast_lookup = lookup.drop_duplicates(subset=['jockey']).set_index('jockey')
     
     # Extract historical going types dynamically from dataset column names
     going_cols = [col for col in lookup.columns if col.startswith('prev_') and col.endswith('_performance')]
@@ -48,6 +59,8 @@ else:
     all_jockeys = []
     all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
     unique_goings_list = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
+    horse_fast_lookup = pd.DataFrame()
+    jockey_fast_lookup = pd.DataFrame()
 
 # =====================================================================
 # 2. RACE CONFIGURATION (SIDEBAR REPLACEMENT WITH AUTOCOMPLETE)
@@ -111,14 +124,14 @@ if len(valid_field_runners) >= 2:
     
     compiled_rows = []
     for runner in valid_field_runners:
-        horse_match = lookup[lookup['horse'] == runner["horse"]]
-        jockey_match = lookup[lookup['jockey'] == runner["jockey"]]
+        h_name = runner["horse"]
+        j_name = runner["jockey"]
         
-        row_data = {'horse': runner["horse"], 'jockey': runner["jockey"]}
+        row_data = {'horse': h_name, 'jockey': j_name}
         
-        # Pull horse records
-        if not horse_match.empty:
-            h_row = horse_match.iloc[0]
+        # Pull horse records instantly using the fast index lookup matrix
+        if h_name in horse_fast_lookup.index:
+            h_row = horse_fast_lookup.loc[h_name]
             for col in ['age', 'wgt', 'or', 'prev_avg_performance', 'horse_hot_streak']:
                 if col in h_row.index:
                     row_data[col] = h_row[col]
@@ -131,9 +144,9 @@ if len(valid_field_runners) >= 2:
             else:
                 row_data['historical_going_performance'] = h_row.get('prev_avg_performance', np.nan)
                     
-        # Pull jockey records
-        if not jockey_match.empty:
-            j_row = jockey_match.iloc[0]
+        # Pull jockey records instantly using the fast index lookup matrix
+        if j_name in jockey_fast_lookup.index:
+            j_row = jockey_fast_lookup.loc[j_name]
             for col in ['jockey_prev_avg_performance', 'jockey_hot_streak']:
                 if col in j_row.index:
                     row_data[col] = j_row[col]
