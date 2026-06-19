@@ -32,19 +32,31 @@ model, lookup = load_production_assets()
 if lookup is not None:
     all_horses = sorted(lookup['horse'].dropna().astype(str).str.strip().unique())
     all_jockeys = sorted(lookup['jockey'].dropna().astype(str).str.strip().unique())
+    # Grab unique rating bands from the dataset if they exist, fallback if not
+    if 'rating_band' in lookup.columns:
+        all_rating_bands = sorted(lookup['rating_band'].dropna().astype(str).str.strip().unique())
+    else:
+        all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Group 1", "Group 2", "Group 3"]
 else:
     all_horses = []
     all_jockeys = []
+    all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
 
 # =====================================================================
-# 2. RACE CONFIGURATION (SIDEBAR REPLACEMENT)
+# 2. RACE CONFIGURATION (SIDEBAR REPLACEMENT WITH AUTOCOMPLETE)
 # =====================================================================
 st.title("🏇 Ascot Multi-Horse Field Ranker")
 st.write("Select your runners to review/edit their historical stats, then run the ranking model.")
 
 st.sidebar.header("⚙️ Race Day Configuration")
-# Global race inputs requested
-race_rating_band = st.sidebar.text_input("Rating Band", value="Class 1")
+
+# Rating Band now uses a searchable selectbox for autocomplete
+race_rating_band = st.sidebar.selectbox(
+    "Search Rating Band", 
+    options=[""] + all_rating_bands, 
+    index=1 if len(all_rating_bands) > 0 else 0
+).strip()
+
 race_ran = st.sidebar.number_input("Total Runners (ran)", value=8, step=1)
 
 # =====================================================================
@@ -131,7 +143,7 @@ if len(valid_field_runners) >= 2:
 
     # =====================================================================
     # 5. MATH INFERENCE AND FORECAST LEADERBOARD
-# =====================================================================
+    # =====================================================================
     if st.button("🔮 Evaluate Competitor Field Ranks"):
         if model is None:
             st.error("🚨 Missing production asset dependencies.")
