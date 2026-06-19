@@ -135,7 +135,7 @@ if len(valid_field_runners) >= 2:
         
     # Render editable table on-screen so missing values can be typed into directly
     edited_matrix_df = st.data_editor(
-        initial_matrix_df.style.applymap(highlight_missing, subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]),
+        initial_matrix_df.style.map(highlight_missing, subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]),
         use_container_width=True,
         disabled=["horse", "jockey", "rating_band", "ran"],
         key="feature_matrix_editor"
