@@ -145,7 +145,7 @@ if st.button("🔮 Evaluate Competitor Field Ranks"):
         feature_columns_final = [col for col in race_day_matrix.columns if col not in drop_cols_list]
         matrix_inference_ready = race_day_matrix[feature_columns_final]
         
-        raw_model_predictions = model.predict(matrix_inference_ready)
+        raw_model_predictions = model.predict(matrix_inference_ready.values)
         
         scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
         exponential_values = np.exp(scaled_logits)
