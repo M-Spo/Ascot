@@ -189,12 +189,25 @@ if len(valid_field_runners) >= 2:
                 
             model_expected_features = model.feature_name_
             
+            # Fill missing required training columns with zero-baselines
             for col in model_expected_features:
                 if col not in processing_df.columns:
                     processing_df[col] = 0.5
                     
-            matrix_inference_ready = processing_df[model_expected_features]
-            raw_model_predictions = model.booster_.predict(matrix_inference_ready.values)
+            # Safely copy to avoid pandas warnings
+            matrix_inference_ready = processing_df[model_expected_features].copy()
+            
+            # --- THE FIX: Format categories and numbers properly ---
+            for col in matrix_inference_ready.columns:
+                if matrix_inference_ready[col].dtype == 'object' or isinstance(matrix_inference_ready[col].iloc[0], str):
+                    # Tell LightGBM this text is an official categorical feature (e.g., Rating Band)
+                    matrix_inference_ready[col] = matrix_inference_ready[col].astype('category')
+                else:
+                    # Force all other numerical stats to be strict floats
+                    matrix_inference_ready[col] = pd.to_numeric(matrix_inference_ready[col], errors='coerce').fillna(0.5)
+            
+            # Run prediction by passing the native Pandas DataFrame (Drop the .values!)
+            raw_model_predictions = model.booster_.predict(matrix_inference_ready)
             
             scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
             exponential_values = np.exp(scaled_logits)
