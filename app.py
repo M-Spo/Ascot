@@ -228,7 +228,6 @@ if st.session_state.matrix_ready:
             st.error("Model not loaded")
             st.stop()
 
-        # Use edited_df here instead of st.session_state.matrix_df
         df = edited_df.copy()
         features = model.feature_name_
 
@@ -236,13 +235,19 @@ if st.session_state.matrix_ready:
             if c not in df.columns:
                 df[c] = 0.5
 
-        # Filter X strictly down to expected features first before assigning types
         X = df[features].copy()
 
+        # Get the exact list of categorical columns LightGBM expects
+        expected_cats = getattr(model, "pandas_categorical", [])
+        if expected_cats is None:
+            expected_cats = []
+
         for c in X.columns:
-            if X[c].dtype == "object":
+            if c in expected_cats:
+                # Force it to category only if LightGBM expects it
                 X[c] = X[c].astype("category")
             else:
+                # Everything else must be strictly numerical
                 X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.5)
 
         raw = model.booster_.predict(X)
@@ -262,9 +267,6 @@ if st.session_state.matrix_ready:
 
         st.subheader("🏁 Leaderboard")
         st.dataframe(df, use_container_width=True)
-
-else:
-    st.info("Build feature matrix first.")
 
 # =====================================================================
 # 9. BOOKIE ODDS CONVERTER
