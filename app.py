@@ -61,7 +61,7 @@ else:
     rating_options = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
 
 # =====================================================================
-# 3. SIDEBAR CONFIG
+# 3. SIDEBAR
 # =====================================================================
 st.sidebar.header("⚙️ Race Setup")
 
@@ -82,7 +82,25 @@ if "matrix_df" not in st.session_state:
     st.session_state.matrix_df = None
 
 # =====================================================================
-# 5. INPUT SECTION (NO PROCESSING)
+# 5. SMART SEARCH (3+ CHAR AUTOCOMPLETE)
+# =====================================================================
+def smart_search(label, options, key):
+    typed = st.text_input(label, key=f"text_{key}")
+
+    if len(typed) < 3:
+        st.caption("Type at least 3 letters to search...")
+        return ""
+
+    filtered = [x for x in options if typed.lower() in x.lower()]
+
+    if len(filtered) == 0:
+        st.warning("No matches found")
+        return ""
+
+    return st.selectbox("Select", filtered, key=key)
+
+# =====================================================================
+# 6. RUNNER INPUT (NO HEAVY LOAD)
 # =====================================================================
 st.header("📋 Enter Runners")
 
@@ -101,21 +119,21 @@ for i, r in enumerate(st.session_state.runners):
     col1, col2 = st.columns(2)
 
     with col1:
-        r["horse"] = st.selectbox(
-            "Horse",
-            [""] + all_horses,
-            key=f"h_{i}"
-        ).strip()
+        r["horse"] = smart_search(
+            "Horse (type 3+ letters)",
+            all_horses,
+            f"horse_{i}"
+        )
 
     with col2:
-        r["jockey"] = st.selectbox(
-            "Jockey",
-            [""] + all_jockeys,
-            key=f"j_{i}"
-        ).strip()
+        r["jockey"] = smart_search(
+            "Jockey (type 3+ letters)",
+            all_jockeys,
+            f"jockey_{i}"
+        )
 
 # =====================================================================
-# 6. BUILD MATRIX (ONLY ON CLICK)
+# 7. BUILD MATRIX
 # =====================================================================
 if st.button("🚀 Build Feature Matrix"):
 
@@ -131,7 +149,6 @@ if st.button("🚀 Build Feature Matrix"):
         h, j = r["horse"], r["jockey"]
         row = {"horse": h, "jockey": j}
 
-        # horse features
         if h in horse_lookup.index:
             hr = horse_lookup.loc[h]
 
@@ -144,7 +161,6 @@ if st.button("🚀 Build Feature Matrix"):
                 hr.get(go_col, hr.get("prev_avg_performance", np.nan))
             )
 
-        # jockey features
         if j in jockey_lookup.index:
             jr = jockey_lookup.loc[j]
 
@@ -152,7 +168,6 @@ if st.button("🚀 Build Feature Matrix"):
                 if col in jr:
                     row[col] = jr[col]
 
-        # globals
         row["rating_band"] = race_rating_band
         row["ran"] = race_ran
         row["bookie_prob"] = np.nan
@@ -165,7 +180,7 @@ if st.button("🚀 Build Feature Matrix"):
     st.success("Feature matrix built")
 
 # =====================================================================
-# 7. MATRIX DISPLAY
+# 8. MATRIX DISPLAY
 # =====================================================================
 if st.session_state.matrix_ready:
 
@@ -177,7 +192,7 @@ if st.session_state.matrix_ready:
     )
 
     # =================================================================
-    # 8. MODEL EVALUATION (YOUR ODDS LOGIC KEPT)
+    # 9. MODEL EVALUATION (YOUR ORIGINAL LOGIC KEPT)
     # =================================================================
     if st.button("🔮 Evaluate Competitor Field Ranks"):
 
@@ -201,9 +216,6 @@ if st.session_state.matrix_ready:
             else:
                 X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.5)
 
-        # ============================
-        # YOUR MODEL LOGIC (UNCHANGED)
-        # ============================
         raw = model.booster_.predict(X)
 
         exp_vals = np.exp(raw - np.max(raw))
@@ -226,7 +238,7 @@ else:
     st.info("Build feature matrix first.")
 
 # =====================================================================
-# 9. BOOKIE ODDS CONVERTER (RESTORED)
+# 10. BOOKIE ODDS CONVERTER
 # =====================================================================
 st.markdown("---")
 st.header("🧮 Bookie Fraction Converter")
