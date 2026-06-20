@@ -168,4 +168,123 @@ if len(valid_field_runners) >= 2:
         
     initial_matrix_df = pd.DataFrame(compiled_rows)
     
-    def highlight
+    def highlight_missing(val):
+        if pd.isna(val) or val == "" or val is None:
+            return 'background-color: #ffcccc; color: black;'
+        return ''
+        
+    styled_df = initial_matrix_df.style.map(
+        highlight_missing, 
+        subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]
+    )
+    
+    editor_key = f"matrix_editor_{today_going}_{race_rating_band}_{len(valid_field_runners)}"
+    
+    # Render with custom column display configuration alias
+    edited_matrix_df = st.data_editor(
+        styled_df,
+        use_container_width=True,
+        disabled=["horse", "jockey", "rating_band", "ran"],
+        column_config={
+            "wgt": "carry_wgt(lbs)",
+            "bookie_prob" : "bookie_win"
+        },
+        key=editor_key
+    )
+
+    # =====================================================================
+    # 5. MATH INFERENCE AND FORECAST LEADERBOARD
+    # =====================================================================
+    if st.button("🔮 Evaluate Competitor Field Ranks"):
+        if model is None:
+            st.error("🚨 Missing production asset dependencies.")
+        else:
+            processing_df = edited_matrix_df.copy()
+            model_expected_features = model.feature_name_
+            
+            # Pad out missing expected tracking features dynamically
+            for col in model_expected_features:
+                if col not in processing_df.columns:
+                    processing_df[col] = 0.5
+                    
+            matrix_inference_ready = processing_df[model_expected_features].copy()
+            
+            # Reconstruct categorical map directly from what the model expects
+            raw_cats = getattr(model, "pandas_categorical", [])
+            cat_map = {}
+            if raw_cats:
+                cat_cols = [f for f in model_expected_features if f in processing_df.columns and (processing_df[f].dtype == "object" or isinstance(processing_df[f].dtype, pd.CategoricalDtype))]
+                for idx, col_name in enumerate(cat_cols):
+                    if idx < len(raw_cats):
+                        cat_map[col_name] = raw_cats[idx]
+
+            # Process clean types for the model booster
+            for col in matrix_inference_ready.columns:
+                if col in cat_map:
+                    from pandas.api.types import CategoricalDtype
+                    # Re-align with historical training values
+                    matrix_inference_ready[col] = matrix_inference_ready[col].astype(CategoricalDtype(categories=cat_map[col]))
+                elif matrix_inference_ready[col].dtype == 'object':
+                    # Fallback handling for unmapped string columns
+                    matrix_inference_ready[col] = matrix_inference_ready[col].astype('category')
+                else:
+                    matrix_inference_ready[col] = pd.to_numeric(matrix_inference_ready[col], errors='coerce').fillna(0.5)
+            
+            # ⚡ FIX: Use raw matrix/numpy formatting directly with LightGBM to skip structural validation mismatch exceptions
+            try:
+                raw_model_predictions = model.booster_.predict(matrix_inference_ready)
+            except ValueError:
+                # Fallback directly to underlying arrays when custom text categories mismatch training definitions
+                raw_model_predictions = model.predict(matrix_inference_ready)
+            
+            scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
+            exponential_values = np.exp(scaled_logits)
+            win_probabilities_distribution = exponential_values / np.sum(exponential_values)
+            
+            placing_scale_factor = min(3.0, len(valid_field_runners))
+            top3_probabilities_distribution = np.clip(win_probabilities_distribution * placing_scale_factor, 0.0, 0.99)
+            
+            display_names = [f"{r['horse'].upper()} / {r['jockey']}" for _, r in processing_df.iterrows()]
+            leaderboard_df = pd.DataFrame({
+                "🎯 Predicted Rank": 0,
+                "Competitor Setup (Horse / Jockey)": display_names,
+                "Win Probability (#1)": [f"{p*100:.1f}%" for p in win_probabilities_distribution],
+                "Top 3 Place Probability": [f"{p*100:.1f}%" for p in top3_probabilities_distribution],
+                "_sorting_metric": win_probabilities_distribution  
+            })
+            
+            leaderboard_df = leaderboard_df.sort_values(by="_sorting_metric", ascending=False).reset_index(drop=True)
+            leaderboard_df["🎯 Predicted Rank"] = leaderboard_df.index + 1
+            leaderboard_df = leaderboard_df.drop(columns=["_sorting_metric"])
+            
+            st.subheader("🏁 Official Model Forecast Leaderboard")
+            st.dataframe(leaderboard_df, use_container_width=True)
+
+else:
+    st.info("💡 Please pick at least 2 autocomplete runner pairs above to generate the interactive feature spreadsheet.")
+
+# =====================================================================
+# 6. FRACTION ODDS TO PROBABILITY PERCENTAGE CONVERTER
+# =====================================================================
+st.markdown("---")
+st.header("🧮 Bookie Fraction Converter")
+st.write("Type in the bookmaker fractional odds (e.g., **4 / 1** or **13 / 8**) to quickly get the probability value for your table.")
+
+calc_col1, calc_col2, calc_col3 = st.columns([2, 1, 3])
+
+with calc_col1:
+    numerator = st.number_input("Numerator (Top Number)", value=4, min_value=1, step=1, key="calc_num")
+with calc_col2:
+    st.markdown("<h3 style='text-align: center; margin-top: 25px;'>/</h3>", unsafe_allow_html=True)
+with calc_col3:
+    denominator = st.number_input("Denominator (Bottom Number)", value=1, min_value=1, step=1, key="calc_den")
+
+# Probability math execution
+implied_prob_decimal = denominator / (numerator + denominator)
+implied_prob_percentage = implied_prob_decimal * 100
+
+st.metric(
+    label="⚡ Target Value for 'bookie_prob' Column", 
+    value=f"{implied_prob_decimal:.3f}  ({implied_prob_percentage:.1f}%)",
+    help="Plug the decimal value directly into the red 'bookie_prob' row cells above."
+)
