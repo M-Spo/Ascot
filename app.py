@@ -82,32 +82,32 @@ if "matrix_df" not in st.session_state:
     st.session_state.matrix_df = None
 
 # =====================================================================
-# 5. RUNNER INPUT (NO HEAVY COMPUTATION)
+# 5. INPUT SECTION (NO PROCESSING)
 # =====================================================================
 st.header("📋 Enter Runners")
 
-col1, col2 = st.columns(2)
+c1, c2 = st.columns(2)
 
-with col1:
+with c1:
     if st.button("➕ Add Runner"):
         st.session_state.runners.append({"horse": "", "jockey": ""})
 
-with col2:
+with c2:
     if st.button("➖ Remove Runner"):
         if len(st.session_state.runners) > 1:
             st.session_state.runners.pop()
 
 for i, r in enumerate(st.session_state.runners):
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with c1:
+    with col1:
         r["horse"] = st.selectbox(
             "Horse",
             [""] + all_horses,
             key=f"h_{i}"
         ).strip()
 
-    with c2:
+    with col2:
         r["jockey"] = st.selectbox(
             "Jockey",
             [""] + all_jockeys,
@@ -115,7 +115,7 @@ for i, r in enumerate(st.session_state.runners):
         ).strip()
 
 # =====================================================================
-# 6. BUILD MATRIX (ONLY WHEN CLICKED)
+# 6. BUILD MATRIX (ONLY ON CLICK)
 # =====================================================================
 if st.button("🚀 Build Feature Matrix"):
 
@@ -131,6 +131,7 @@ if st.button("🚀 Build Feature Matrix"):
         h, j = r["horse"], r["jockey"]
         row = {"horse": h, "jockey": j}
 
+        # horse features
         if h in horse_lookup.index:
             hr = horse_lookup.loc[h]
 
@@ -143,6 +144,7 @@ if st.button("🚀 Build Feature Matrix"):
                 hr.get(go_col, hr.get("prev_avg_performance", np.nan))
             )
 
+        # jockey features
         if j in jockey_lookup.index:
             jr = jockey_lookup.loc[j]
 
@@ -150,6 +152,7 @@ if st.button("🚀 Build Feature Matrix"):
                 if col in jr:
                     row[col] = jr[col]
 
+        # globals
         row["rating_band"] = race_rating_band
         row["ran"] = race_ran
         row["bookie_prob"] = np.nan
@@ -162,7 +165,7 @@ if st.button("🚀 Build Feature Matrix"):
     st.success("Feature matrix built")
 
 # =====================================================================
-# 7. MATRIX VIEW
+# 7. MATRIX DISPLAY
 # =====================================================================
 if st.session_state.matrix_ready:
 
@@ -174,7 +177,7 @@ if st.session_state.matrix_ready:
     )
 
     # =================================================================
-    # 8. EVALUATE (YOUR ORIGINAL ODDS LOGIC KEPT)
+    # 8. MODEL EVALUATION (YOUR ODDS LOGIC KEPT)
     # =================================================================
     if st.button("🔮 Evaluate Competitor Field Ranks"):
 
@@ -184,13 +187,13 @@ if st.session_state.matrix_ready:
 
         df = st.session_state.matrix_df.copy()
 
-        model_features = model.feature_name_
+        features = model.feature_name_
 
-        for c in model_features:
+        for c in features:
             if c not in df.columns:
                 df[c] = 0.5
 
-        X = df[model_features].copy()
+        X = df[features].copy()
 
         for c in X.columns:
             if X[c].dtype == "object":
@@ -198,16 +201,14 @@ if st.session_state.matrix_ready:
             else:
                 X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.5)
 
-        # ================================
-        # MODEL PREDICTIONS (UNCHANGED IDEA)
-        # ================================
+        # ============================
+        # YOUR MODEL LOGIC (UNCHANGED)
+        # ============================
         raw = model.booster_.predict(X)
 
-        # stable softmax
         exp_vals = np.exp(raw - np.max(raw))
         win_probs = exp_vals / np.sum(exp_vals)
 
-        # keep your scaling logic
         placing_scale_factor = min(3.0, len(df))
         top3_probs = np.clip(win_probs * placing_scale_factor, 0.0, 0.99)
 
@@ -222,4 +223,28 @@ if st.session_state.matrix_ready:
         st.dataframe(df, use_container_width=True)
 
 else:
-    st.info("Build the feature matrix first.")
+    st.info("Build feature matrix first.")
+
+# =====================================================================
+# 9. BOOKIE ODDS CONVERTER (RESTORED)
+# =====================================================================
+st.markdown("---")
+st.header("🧮 Bookie Fraction Converter")
+
+st.write("Convert fractional odds into implied probability for bookie_prob feature.")
+
+col1, col2, col3 = st.columns([2, 1, 2])
+
+with col1:
+    num = st.number_input("Numerator", value=4, min_value=1, step=1)
+
+with col2:
+    st.markdown("<h3 style='text-align:center;'>/</h3>", unsafe_allow_html=True)
+
+with col3:
+    den = st.number_input("Denominator", value=1, min_value=1, step=1)
+
+implied = den / (num + den)
+
+st.metric("Implied Probability", f"{implied:.4f}")
+st.caption(f"{implied*100:.2f}%")
