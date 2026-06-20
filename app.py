@@ -1,96 +1,150 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import joblib
 
-# Set page layout configuration
-st.set_page_config(page_title="Ascot Predictive Engine", layout="wide")
+st.set_page_config(page_title="Ascot Multi-Horse Ranker", layout="wide")
 
 # =====================================================================
-# 1. INITIAL SYSTEM PATH INITIALIZATION & STORAGE VALIDATION
+# 1. LOAD ASSETS
 # =====================================================================
-DB_DIR = "competitor_databases"
-MODEL_PATH = "lgbm_ranker_model.pkl"
-
 @st.cache_resource
-def load_predictive_assets():
-    """Safely handles importing the core serialized LightGBM runtime pipeline."""
-    if not os.path.exists(MODEL_PATH):
-        return None
+def load_assets():
     try:
-        return joblib.load(MODEL_PATH)
-    except Exception:
-        return None
+        model = joblib.load("lgbm_ranker_model.pkl")
 
-@st.cache_data
-def load_competitor_records():
-    """Initializes and transforms compressed lookup registers into reference indices."""
-    horse_path = os.path.join(DB_DIR, "horse_lookup.csv")
-    jockey_path = os.path.join(DB_DIR, "jockey_lookup.csv")
-    
-    h_df = pd.read_csv(horse_path).set_index("horse") if os.path.exists(horse_path) else pd.DataFrame()
-    j_df = pd.read_csv(jockey_path).set_index("jockey") if os.path.exists(jockey_path) else pd.DataFrame()
-    
-    return h_df, j_df
+        part1 = pd.read_csv("historical_lookup_part1.zip")
+        part2 = pd.read_csv("historical_lookup_part2.zip")
+        part3 = pd.read_csv("historical_lookup_part3.zip")
 
-model = load_predictive_assets()
-horse_lookup, jockey_lookup = load_competitor_records()
+        lookup = pd.concat([part1, part2, part3], ignore_index=True)
+
+        return model, lookup
+
+    except Exception as e:
+        st.error(f"Asset load failed: {e}")
+        return None, None
+
+
+model, lookup = load_assets()
 
 # =====================================================================
-# 2. RUNTIME APPLICATION STATE SEEDING
+# 2. SAFE LOOKUP PREP
 # =====================================================================
+if lookup is not None:
+
+    lookup["horse"] = lookup["horse"].astype(str).str.strip()
+    lookup["jockey"] = lookup["jockey"].astype(str).str.strip()
+
+    all_horses = sorted(lookup["horse"].dropna().unique()) if "horse" in lookup.columns else []
+    all_jockeys = sorted(lookup["jockey"].dropna().unique()) if "jockey" in lookup.columns else []
+
+    horse_lookup = lookup.drop_duplicates("horse").set_index("horse")
+    jockey_lookup = lookup.drop_duplicates("jockey").set_index("jockey")
+
+    going_cols = [c for c in lookup.columns if c.startswith("prev_") and c.endswith("_performance")]
+    goings = [c.replace("prev_", "").replace("_performance", "") for c in going_cols]
+
+    if not goings:
+        goings = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
+
+    if "rating_band" in lookup.columns:
+        rating_options = [""] + sorted(lookup["rating_band"].dropna().astype(str).unique())
+    else:
+        rating_options = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
+
+else:
+    all_horses, all_jockeys = [], []
+    horse_lookup = pd.DataFrame()
+    jockey_lookup = pd.DataFrame()
+    goings = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
+    rating_options = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
+
+# =====================================================================
+# 3. SIDEBAR
+# =====================================================================
+st.sidebar.header("⚙️ Race Setup")
+
+today_going = st.sidebar.selectbox("Going", goings)
+race_ran = st.sidebar.number_input("Total Runners", value=8, step=1)
+race_rating_band = st.sidebar.selectbox("Rating Band", rating_options)
+
+# =====================================================================
+# 4. SESSION STATE
+# =====================================================================
+if "num_runners" not in st.session_state:
+    st.session_state.num_runners = 3
+
 if "matrix_ready" not in st.session_state:
     st.session_state.matrix_ready = False
+
 if "matrix_df" not in st.session_state:
-    st.session_state.matrix_df = pd.DataFrame()
+    st.session_state.matrix_df = None
 
 # =====================================================================
-# 3. INTERACTIVE CONTROL PANEL (TRACKSIDE ENVIRONMENTS)
+# 5. RUNNER SELECTOR (FIXED KEY LIFECYCLE FOR MOBILE)
 # =====================================================================
-st.title("🏇 Trackside Live Evaluation Framework")
-st.sidebar.header("📋 Environment Specifications")
+st.header("📋 Field Entry Profile Selection")
 
-today_going = st.sidebar.selectbox("Current Track Surface Going", ["Good", "Firm", "Soft", "Heavy", "Yielding"])
-race_rating_band = st.sidebar.text_input("Race Class / Rating Band", "Class 4 - 80-95")
-race_ran = st.sidebar.number_input("Total Declared Field Size (Ran)", min_value=2, max_value=40, value=10, step=1)
+col_add, col_rem, _ = st.columns([1, 1, 4])
 
-# =====================================================================
-# 4. ACTIVE ENTRANT COMPILATION REGISTRY
-# =====================================================================
-st.header("🎟️ Active Competitor Roster")
-st.markdown("Populate the active race card dropdown selectors below to pull historical profiling.")
+with col_add:
+    if st.button("➕ Add Runner Position"):
+        st.session_state.num_runners += 1
 
-# Fallback structures for select values if files are unpopulated
-horse_pool = sorted(horse_lookup.index.tolist()) if not horse_lookup.empty else ["Add Horse Manually"]
-jockey_pool = sorted(jockey_lookup.index.tolist()) if not jockey_lookup.empty else ["Add Jockey Manually"]
+with col_rem:
+    if st.button("❌ Remove Last Position") and st.session_state.num_runners > 2:
+        st.session_state.num_runners -= 1
+
+# Precompute lowercase lookup lists for speed
+all_horses_lc = [(h, h.lower()) for h in all_horses]
+all_jockeys_lc = [(j, j.lower()) for j in all_jockeys]
 
 runners_input_list = []
-slots_to_generate = race_ran
 
-col1, col2 = st.columns(2)
-for idx in range(slots_to_generate):
-    # Dynamically alternate placements between layout panels for dense optimization
-    target_col = col1 if idx % 2 == 0 else col2
-    with target_col:
-        st.markdown(f"**Gate Position Slot #{idx + 1}**")
-        sub_c1, sub_c2 = st.columns(2)
-        with sub_c1:
-            h_sel = st.selectbox(f"Select Horse #{idx+1}", [""] + horse_pool, key=f"h_slot_{idx}")
-        with sub_c2:
-            j_sel = st.selectbox(f"Select Jockey #{idx+1}", [""] + jockey_pool, key=f"j_slot_{idx}")
-        runners_input_list.append({"horse": h_sel, "jockey": j_sel})
+for i in range(st.session_state.num_runners):
+
+    st.markdown(f"**Runner Position #{i+1}**")
+    r_col1, r_col2 = st.columns(2)
+
+    # ============================
+    # HORSE SEARCH
+    # ============================
+    with r_col1:
+        h_search = st.text_input("Type Horse Name to Filter", key=f"horse_search_{i}").strip().lower()
+        
+        # Keep structural setup stable: update options dynamically without changing widget paths
+        if len(h_search) >= 2:
+            filtered_horses = [h for h, hl in all_horses_lc if h_search in hl][:20]
+        else:
+            filtered_horses = []
+            
+        h_name = st.selectbox("Select Horse Match", [""] + filtered_horses, key=f"horse_input_{i}")
+
+    # ============================
+    # JOCKEY SEARCH
+    # ============================
+    with r_col2:
+        j_search = st.text_input("Type Jockey Name to Filter", key=f"jockey_search_{i}").strip().lower()
+        
+        if len(j_search) >= 2:
+            filtered_jockeys = [j for j, jl in all_jockeys_lc if j_search in jl][:20]
+        else:
+            filtered_jockeys = []
+            
+        j_name = st.selectbox("Select Jockey Match", [""] + filtered_jockeys, key=f"jockey_input_{i}")
+
+    runners_input_list.append({"horse": h_name, "jockey": j_name})
 
 # =====================================================================
-# 5. CODE BLOCK: FEATURE MATRIX COMPILATION ENGINE
+# 6. BUILD MATRIX (GUARANTEED COLUMNS FOR MANUAL INPUT)
 # =====================================================================
-st.markdown("---")
 if st.button("🚀 Build Feature Matrix"):
 
     valid = [r for r in runners_input_list if r["horse"] and r["jockey"]]
 
     if len(valid) < 2:
-        st.error("❗ Minimum Requirement Mismatch: Please fully assign at least two (2) complete Horse-Jockey pairs.")
+        st.error("Need at least 2 valid runners fully selected from dropdowns.")
         st.stop()
 
     rows = []
@@ -98,17 +152,17 @@ if st.button("🚀 Build Feature Matrix"):
     for r in valid:
         h, j = r["horse"], r["jockey"]
         
-        # Enforce structural creation of all baseline evaluation slots.
-        # This guarantees user-input spaces materialize explicitly for modification.
+        # ⚡ FIX: Explicitly pre-define every single column header so they 
+        # are guaranteed to appear in a clean, predictable trackside order.
         row = {
             "horse": h,
             "jockey": j,
             "rating_band": race_rating_band,
             "ran": race_ran,
-            "age": np.nan,         
-            "wgt": np.nan,         
-            "or": np.nan,          
-            "bookie_prob": np.nan, 
+            "age": np.nan,         # Blank slot waiting for your manual input
+            "wgt": np.nan,         # Blank slot waiting for your manual input
+            "or": np.nan,          # Blank slot waiting for your manual input
+            "bookie_prob": np.nan, # Blank slot waiting for your manual input
             "prev_avg_performance": np.nan,
             "horse_hot_streak": np.nan,
             "historical_going_performance": np.nan,
@@ -116,7 +170,7 @@ if st.button("🚀 Build Feature Matrix"):
             "jockey_hot_streak": np.nan
         }
 
-        # Parse historical database indexes if matched
+        # Pull historical values from database if the competitor exists
         if h in horse_lookup.index:
             hr = horse_lookup.loc[h]
             
@@ -125,8 +179,8 @@ if st.button("🚀 Build Feature Matrix"):
             if "horse_hot_streak" in hr:
                 row["horse_hot_streak"] = hr["horse_hot_streak"]
 
-            # Ground-state dynamic lookup fallbacks for track variance
-            go_col = f"prev_{today_going.lower()}_performance"
+            # Robust going lookup fallback logic
+            go_col = f"prev_{today_going}_performance"
             if go_col in hr and pd.notna(hr[go_col]):
                 row["historical_going_performance"] = hr[go_col]
             elif "prev_avg_performance" in hr and pd.notna(hr["prev_avg_performance"]):
@@ -144,85 +198,94 @@ if st.button("🚀 Build Feature Matrix"):
 
     st.session_state.matrix_df = pd.DataFrame(rows)
     st.session_state.matrix_ready = True
-    st.success("🏁 Vector Matrix compilation finalized. Manual overrides unlocked below.")
+    st.success("Feature matrix built successfully.")
 
 # =====================================================================
-# 6. CODE BLOCK: USER CONTEXT DISPLAY & RE-ENTRY INTERFACES
+# 7. MATRIX DISPLAY
 # =====================================================================
 if st.session_state.matrix_ready:
-    st.header("📊 Trackside Feature Matrix")
-    st.info("Double-click empty white cells to manually supply Live Age, Carry Weight, OR, or Bookmaker Odds info.")
 
-    # Divert widget output to a separate frame object to safeguard runtime baseline and prevent focus resets
-    edited_matrix = st.data_editor(
+    st.header("📊 Feature Matrix")
+
+    # ⚡ FIXED: Assign data output to edited_df to prevent data drop-out on first keypress
+    edited_df = st.data_editor(
         st.session_state.matrix_df,
-        hide_index=True,
         use_container_width=True,
-        disabled=[
-            "horse", "jockey", "rating_band", "ran", 
-            "prev_avg_performance", "horse_hot_streak", 
-            "historical_going_performance", "jockey_prev_avg_performance", 
-            "jockey_hot_streak"
-        ],
+        disabled=["horse", "jockey", "rating_band", "ran"],
         column_config={
-            "wgt": "added_wgt(lbs)",
+            "wgt": "carry_wgt(lbs)",
             "bookie_prob": "bookie_win"
         },
         key="main_race_matrix_editor"
     )
 
-    # =====================================================================
-    # 7. MODEL RUNTIME EVALUATION & INFERENCE PIPELINE
-    # =====================================================================
-    st.markdown("---")
+    # =================================================================
+    # 8. MODEL EVALUATION
+    # =================================================================
     if st.button("🔮 Evaluate Competitor Field Ranks"):
+
         if model is None:
-            st.error(f"❌ Missing Core Pipeline Dependency: No trained '{MODEL_PATH}' was detected on root storage.")
+            st.error("Model not loaded")
             st.stop()
 
-        with st.spinner("Executing structural feature extraction and model inference..."):
-            # Work downstream directly using our modified cache reference frame
-            X = edited_matrix.copy()
-            
-            # Fetch properties matching what the model was trained on
-            try:
-                model_features = model.feature_name_
-            except AttributeError:
-                # Fallback variant parsing sequence for variant pipelines
-                model_features = model.booster_.feature_name()
+        # Use edited_df here instead of st.session_state.matrix_df
+        df = edited_df.copy()
+        features = model.feature_name_
 
-            # Align inputs perfectly to avoid missing or extra variable mismatches
-            for col in model_features:
-                if col not in X.columns:
-                    X[col] = np.nan
+        for c in features:
+            if c not in df.columns:
+                df[c] = 0.5
 
-            # Subset frame down exactly to target structures
-            X = X[model_features]
+        # Filter X strictly down to expected features first before assigning types
+        X = df[features].copy()
 
-            # Re-verify and format matching categorical dtypes for LightGBM
-            for c in X.columns:
-                if X[c].dtype == "object" or isinstance(X[c].dtype, pd.CategoricalDtype):
-                    X[c] = X[c].astype("category")
-                else:
-                    # Enforce solid numerical boundaries over remaining fields
-                    X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.0)
+        for c in X.columns:
+            if X[c].dtype == "object":
+                X[c] = X[c].astype("category")
+            else:
+                X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.5)
 
-            # Compute raw margins using LightGBM core booster runtime structures
-            raw_scores = model.booster_.predict(X)
-            
-            # Apply stable Softmax normalizations to raw outputs to yield probabilities
-            exp_scores = np.exp(raw_scores - np.max(raw_scores))
-            probabilities = exp_scores / np.sum(exp_scores)
+        raw = model.booster_.predict(X)
 
-            # Map array solutions directly back into context visualization frames
-            output_df = pd.DataFrame({
-                "Competitor (Horse)": edited_matrix["horse"],
-                "Assigned Jockey": edited_matrix["jockey"],
-                "Model Structural Probability": [f"{p*100:.2f}%" for p in probabilities],
-                "Raw Score Metric": raw_scores
-            }).sort_values(by="Raw Score Metric", ascending=False).reset_index(drop=True)
+        exp_vals = np.exp(raw - np.max(raw))
+        win_probs = exp_vals / np.sum(exp_vals)
 
-            # Render final analytics tracking frame back to client
-            st.header("🏆 Calculated Performance Output Metrics")
-            st.dataframe(output_df, use_container_width=True)
-            st.balloons()
+        placing_scale_factor = min(3.0, len(df))
+        top3_probs = np.clip(win_probs * placing_scale_factor, 0.0, 0.99)
+
+        df["Win Probability"] = [f"{p*100:.1f}%" for p in win_probs]
+        df["Top 3 Probability"] = [f"{p*100:.1f}%" for p in top3_probs]
+
+        df = df.assign(_p=win_probs).sort_values("_p", ascending=False)
+        df["Rank"] = range(1, len(df) + 1)
+        df = df.drop(columns=["_p"])
+
+        st.subheader("🏁 Leaderboard")
+        st.dataframe(df, use_container_width=True)
+
+else:
+    st.info("Build feature matrix first.")
+
+# =====================================================================
+# 9. BOOKIE ODDS CONVERTER
+# =====================================================================
+st.markdown("---")
+st.header("🧮 Bookie Fraction Converter")
+
+st.write("Convert fractional odds into implied probability for bookie_prob feature.")
+
+col1, col2, col3 = st.columns([2, 1, 2])
+
+with col1:
+    num = st.number_input("Numerator", value=4, min_value=1, step=1)
+
+with col2:
+    st.markdown("<h3 style='text-align:center;'>/</h3>", unsafe_allow_html=True)
+
+with col3:
+    den = st.number_input("Denominator", value=1, min_value=1, step=1)
+
+implied = den / (num + den)
+
+st.metric("Implied Probability", f"{implied:.4f}")
+st.caption(f"{implied*100:.2f}%")
