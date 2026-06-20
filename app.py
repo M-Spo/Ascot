@@ -82,7 +82,7 @@ if "matrix_df" not in st.session_state:
     st.session_state.matrix_df = None
 
 # =====================================================================
-# 5. RUNNER SELECTOR (YOUR VERSION, STABILISED)
+# 5. RUNNER SELECTOR (FIXED KEY LIFECYCLE FOR MOBILE)
 # =====================================================================
 st.header("📋 Field Entry Profile Selection")
 
@@ -96,7 +96,7 @@ with col_rem:
     if st.button("❌ Remove Last Position") and st.session_state.num_runners > 2:
         st.session_state.num_runners -= 1
 
-# ⚡ PRECOMPUTE LOWERCASE LOOKUP (speed fix)
+# Precompute lowercase lookup lists for speed
 all_horses_lc = [(h, h.lower()) for h in all_horses]
 all_jockeys_lc = [(j, j.lower()) for j in all_jockeys]
 
@@ -111,49 +111,28 @@ for i in range(st.session_state.num_runners):
     # HORSE SEARCH
     # ============================
     with r_col1:
-
-        h_search = st.text_input(
-            "Type Horse (min 2–3 letters)",
-            key=f"horse_search_{i}"
-        ).strip().lower()
-
-        if len(h_search) >= 3:
-            filtered_horses = [h for h, hl in all_horses_lc if h_search in hl]
-            h_name = st.selectbox(
-                "Select Horse",
-                [""] + filtered_horses,
-                key=f"horse_input_{i}"
-            )
+        h_search = st.text_input("Type Horse Name to Filter", key=f"horse_search_{i}").strip().lower()
+        
+        # Keep structural setup stable: update options dynamically without changing widget paths
+        if len(h_search) >= 2:
+            filtered_horses = [h for h, hl in all_horses_lc if h_search in hl][:20]
         else:
-            h_name = st.selectbox(
-                "Select Horse",
-                [""],
-                key=f"horse_input_{i}"
-            )
+            filtered_horses = []
+            
+        h_name = st.selectbox("Select Horse Match", [""] + filtered_horses, key=f"horse_input_{i}")
 
     # ============================
     # JOCKEY SEARCH
     # ============================
     with r_col2:
-
-        j_search = st.text_input(
-            "Type Jockey (min 2–3 letters)",
-            key=f"jockey_search_{i}"
-        ).strip().lower()
-
-        if len(j_search) >= 3:
-            filtered_jockeys = [j for j, jl in all_jockeys_lc if j_search in jl]
-            j_name = st.selectbox(
-                "Select Jockey",
-                [""] + filtered_jockeys,
-                key=f"jockey_input_{i}"
-            )
+        j_search = st.text_input("Type Jockey Name to Filter", key=f"jockey_search_{i}").strip().lower()
+        
+        if len(j_search) >= 2:
+            filtered_jockeys = [j for j, jl in all_jockeys_lc if j_search in jl][:20]
         else:
-            j_name = st.selectbox(
-                "Select Jockey",
-                [""],
-                key=f"jockey_input_{i}"
-            )
+            filtered_jockeys = []
+            
+        j_name = st.selectbox("Select Jockey Match", [""] + filtered_jockeys, key=f"jockey_input_{i}")
 
     runners_input_list.append({"horse": h_name, "jockey": j_name})
 
@@ -165,7 +144,7 @@ if st.button("🚀 Build Feature Matrix"):
     valid = [r for r in runners_input_list if r["horse"] and r["jockey"]]
 
     if len(valid) < 2:
-        st.error("Need at least 2 valid runners")
+        st.error("Need at least 2 valid runners fully selected from dropdowns.")
         st.stop()
 
     rows = []
@@ -181,17 +160,12 @@ if st.button("🚀 Build Feature Matrix"):
                 if col in hr:
                     row[col] = hr[col]
 
+            # ⚡ FIXED: Explicitly check inside cells to prevent the None/NaN leak
             go_col = f"prev_{today_going}_performance"
-
-            # 1. Check if the specific going column exists AND the cell isn't blank
             if go_col in hr and pd.notna(hr[go_col]):
                 row["historical_going_performance"] = hr[go_col]
-            
-            # 2. If it is blank, fall back to the average performance column if it isn't blank
             elif "prev_avg_performance" in hr and pd.notna(hr["prev_avg_performance"]):
                 row["historical_going_performance"] = hr["prev_avg_performance"]
-            
-            # 3. Ultimate safety net if the horse has absolutely zero data
             else:
                 row["historical_going_performance"] = np.nan
 
@@ -210,28 +184,29 @@ if st.button("🚀 Build Feature Matrix"):
 
     st.session_state.matrix_df = pd.DataFrame(rows)
     st.session_state.matrix_ready = True
-
-    st.success("Feature matrix built")
+    st.success("Feature matrix built successfully.")
 
 # =====================================================================
-# 7. MATRIX DISPLAY (WITH CUSTOM LABELS RESTORED)
+# 7. MATRIX DISPLAY
 # =====================================================================
 if st.session_state.matrix_ready:
 
     st.header("📊 Feature Matrix")
 
+    # ⚡ FIXED: Added custom display labels and a fixed widget key to preserve data changes
     st.session_state.matrix_df = st.data_editor(
         st.session_state.matrix_df,
         use_container_width=True,
-        disabled=["horse", "jockey", "rating_band", "ran"],  # Locks structural info
+        disabled=["horse", "jockey", "rating_band", "ran"],
         column_config={
             "wgt": "carry_wgt(lbs)",
             "bookie_prob": "bookie_win"
-        }
+        },
+        key="main_race_matrix_editor"
     )
 
     # =================================================================
-    # 8. MODEL EVALUATION (YOUR ODDS LOGIC PRESERVED)
+    # 8. MODEL EVALUATION
     # =================================================================
     if st.button("🔮 Evaluate Competitor Field Ranks"):
 
@@ -240,7 +215,6 @@ if st.session_state.matrix_ready:
             st.stop()
 
         df = st.session_state.matrix_df.copy()
-
         features = model.feature_name_
 
         for c in features:
