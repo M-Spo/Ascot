@@ -111,28 +111,33 @@ for i in range(st.session_state.num_runners):
     # HORSE SEARCH
     # ============================
     with r_col1:
-        h_search = st.text_input("Type Horse Name to Filter", key=f"horse_search_{i}").strip().lower()
+        h_search = st.text_input("Type Horse Name to Filter/Add", key=f"horse_search_{i}").strip()
+        h_search_lc = h_search.lower()
         
-        # Keep structural setup stable: update options dynamically without changing widget paths
-        if len(h_search) >= 2:
-            filtered_horses = [h for h, hl in all_horses_lc if h_search in hl][:20]
+        if len(h_search_lc) >= 2:
+            filtered_horses = [h for h, hl in all_horses_lc if h_search_lc in hl][:20]
         else:
             filtered_horses = []
             
-        h_name = st.selectbox("Select Horse Match", [""] + filtered_horses, key=f"horse_input_{i}")
+        h_sel = st.selectbox("Select Horse Match", [""] + filtered_horses, key=f"horse_input_{i}")
+        # ⚡ FIX: Use the typed name if no match was selected from the dropdown
+        h_name = h_sel if h_sel != "" else h_search
 
     # ============================
     # JOCKEY SEARCH
     # ============================
     with r_col2:
-        j_search = st.text_input("Type Jockey Name to Filter", key=f"jockey_search_{i}").strip().lower()
+        j_search = st.text_input("Type Jockey Name to Filter/Add", key=f"jockey_search_{i}").strip()
+        j_search_lc = j_search.lower()
         
-        if len(j_search) >= 2:
-            filtered_jockeys = [j for j, jl in all_jockeys_lc if j_search in jl][:20]
+        if len(j_search_lc) >= 2:
+            filtered_jockeys = [j for j, jl in all_jockeys_lc if j_search_lc in jl][:20]
         else:
             filtered_jockeys = []
             
-        j_name = st.selectbox("Select Jockey Match", [""] + filtered_jockeys, key=f"jockey_input_{i}")
+        j_sel = st.selectbox("Select Jockey Match", [""] + filtered_jockeys, key=f"jockey_input_{i}")
+        # ⚡ FIX: Use the typed name if no match was selected from the dropdown
+        j_name = j_sel if j_sel != "" else j_search
 
     runners_input_list.append({"horse": h_name, "jockey": j_name})
 
@@ -237,20 +242,19 @@ if st.session_state.matrix_ready:
 
         X = df[features].copy()
 
-        # Get the exact list of categorical columns LightGBM expects
+        # Safely determine categorical alignment based on original training metadata
         expected_cats = getattr(model, "pandas_categorical", [])
         if expected_cats is None:
             expected_cats = []
 
         for c in X.columns:
-            if c in expected_cats:
-                # Force it to category only if LightGBM expects it
+            if c in expected_cats or X[c].dtype == "object":
                 X[c] = X[c].astype("category")
             else:
-                # Everything else must be strictly numerical
                 X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.5)
 
-        raw = model.booster_.predict(X)
+        # ⚡ FIX: Use validate_features=False to suppress the rigid LightGBM string checks
+        raw = model.booster_.predict(X, validate_features=False)
 
         exp_vals = np.exp(raw - np.max(raw))
         win_probs = exp_vals / np.sum(exp_vals)
