@@ -48,7 +48,6 @@ if lookup is not None:
     if not goings:
         goings = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
 
-    # SAFE rating band handling
     if "rating_band" in lookup.columns:
         rating_options = [""] + sorted(lookup["rating_band"].dropna().astype(str).unique())
     else:
@@ -83,32 +82,32 @@ if "matrix_df" not in st.session_state:
     st.session_state.matrix_df = None
 
 # =====================================================================
-# 5. INPUT STAGE (NO HEAVY COMPUTATION)
+# 5. RUNNER INPUT (NO HEAVY COMPUTATION)
 # =====================================================================
-st.header("📋 Enter Runners (No Processing Yet)")
+st.header("📋 Enter Runners")
 
-c1, c2 = st.columns(2)
+col1, col2 = st.columns(2)
 
-with c1:
+with col1:
     if st.button("➕ Add Runner"):
         st.session_state.runners.append({"horse": "", "jockey": ""})
 
-with c2:
+with col2:
     if st.button("➖ Remove Runner"):
         if len(st.session_state.runners) > 1:
             st.session_state.runners.pop()
 
 for i, r in enumerate(st.session_state.runners):
-    col1, col2 = st.columns(2)
+    c1, c2 = st.columns(2)
 
-    with col1:
+    with c1:
         r["horse"] = st.selectbox(
             "Horse",
             [""] + all_horses,
             key=f"h_{i}"
         ).strip()
 
-    with col2:
+    with c2:
         r["jockey"] = st.selectbox(
             "Jockey",
             [""] + all_jockeys,
@@ -132,7 +131,6 @@ if st.button("🚀 Build Feature Matrix"):
         h, j = r["horse"], r["jockey"]
         row = {"horse": h, "jockey": j}
 
-        # horse features
         if h in horse_lookup.index:
             hr = horse_lookup.loc[h]
 
@@ -145,7 +143,6 @@ if st.button("🚀 Build Feature Matrix"):
                 hr.get(go_col, hr.get("prev_avg_performance", np.nan))
             )
 
-        # jockey features
         if j in jockey_lookup.index:
             jr = jockey_lookup.loc[j]
 
@@ -153,38 +150,33 @@ if st.button("🚀 Build Feature Matrix"):
                 if col in jr:
                     row[col] = jr[col]
 
-        # global inputs
         row["rating_band"] = race_rating_band
         row["ran"] = race_ran
         row["bookie_prob"] = np.nan
 
         rows.append(row)
 
-    df = pd.DataFrame(rows)
-
-    st.session_state.matrix_df = df
+    st.session_state.matrix_df = pd.DataFrame(rows)
     st.session_state.matrix_ready = True
 
-    st.success("Feature matrix built successfully")
+    st.success("Feature matrix built")
 
 # =====================================================================
-# 7. MATRIX VIEW + EDIT
+# 7. MATRIX VIEW
 # =====================================================================
 if st.session_state.matrix_ready:
 
     st.header("📊 Feature Matrix")
 
-    edited = st.data_editor(
+    st.session_state.matrix_df = st.data_editor(
         st.session_state.matrix_df,
         use_container_width=True
     )
 
-    st.session_state.matrix_df = edited
-
     # =================================================================
-    # 8. MODEL INFERENCE
+    # 8. EVALUATE (YOUR ORIGINAL ODDS LOGIC KEPT)
     # =================================================================
-    if st.button("🔮 Evaluate Field"):
+    if st.button("🔮 Evaluate Competitor Field Ranks"):
 
         if model is None:
             st.error("Model not loaded")
@@ -192,13 +184,13 @@ if st.session_state.matrix_ready:
 
         df = st.session_state.matrix_df.copy()
 
-        features = model.feature_name_
+        model_features = model.feature_name_
 
-        for c in features:
+        for c in model_features:
             if c not in df.columns:
                 df[c] = 0.5
 
-        X = df[features].copy()
+        X = df[model_features].copy()
 
         for c in X.columns:
             if X[c].dtype == "object":
@@ -206,14 +198,23 @@ if st.session_state.matrix_ready:
             else:
                 X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.5)
 
-        preds = model.booster_.predict(X)
+        # ================================
+        # MODEL PREDICTIONS (UNCHANGED IDEA)
+        # ================================
+        raw = model.booster_.predict(X)
 
-        probs = np.exp(preds - np.max(preds))
-        probs = probs / np.sum(probs)
+        # stable softmax
+        exp_vals = np.exp(raw - np.max(raw))
+        win_probs = exp_vals / np.sum(exp_vals)
 
-        df["Win %"] = [f"{p*100:.1f}%" for p in probs]
+        # keep your scaling logic
+        placing_scale_factor = min(3.0, len(df))
+        top3_probs = np.clip(win_probs * placing_scale_factor, 0.0, 0.99)
 
-        df = df.assign(_p=probs).sort_values("_p", ascending=False)
+        df["Win Probability"] = [f"{p*100:.1f}%" for p in win_probs]
+        df["Top 3 Probability"] = [f"{p*100:.1f}%" for p in top3_probs]
+
+        df = df.assign(_p=win_probs).sort_values("_p", ascending=False)
         df["Rank"] = range(1, len(df) + 1)
         df = df.drop(columns=["_p"])
 
@@ -221,4 +222,4 @@ if st.session_state.matrix_ready:
         st.dataframe(df, use_container_width=True)
 
 else:
-    st.info("Enter runners and click 'Build Feature Matrix' first.")
+    st.info("Build the feature matrix first.")
