@@ -182,9 +182,18 @@ if st.button("🚀 Build Feature Matrix"):
                     row[col] = hr[col]
 
             go_col = f"prev_{today_going}_performance"
-            row["historical_going_performance"] = (
-                hr.get(go_col, hr.get("prev_avg_performance", np.nan))
-            )
+
+            # 1. Check if the specific going column exists AND the cell isn't blank
+            if go_col in hr and pd.notna(hr[go_col]):
+                row["historical_going_performance"] = hr[go_col]
+            
+            # 2. If it is blank, fall back to the average performance column if it isn't blank
+            elif "prev_avg_performance" in hr and pd.notna(hr["prev_avg_performance"]):
+                row["historical_going_performance"] = hr["prev_avg_performance"]
+            
+            # 3. Ultimate safety net if the horse has absolutely zero data
+            else:
+                row["historical_going_performance"] = np.nan
 
         if j in jockey_lookup.index:
             jr = jockey_lookup.loc[j]
@@ -205,7 +214,7 @@ if st.button("🚀 Build Feature Matrix"):
     st.success("Feature matrix built")
 
 # =====================================================================
-# 7. MATRIX DISPLAY
+# 7. MATRIX DISPLAY (WITH CUSTOM LABELS RESTORED)
 # =====================================================================
 if st.session_state.matrix_ready:
 
@@ -213,7 +222,12 @@ if st.session_state.matrix_ready:
 
     st.session_state.matrix_df = st.data_editor(
         st.session_state.matrix_df,
-        use_container_width=True
+        use_container_width=True,
+        disabled=["horse", "jockey", "rating_band", "ran"],  # Locks structural info
+        column_config={
+            "wgt": "carry_wgt(lbs)",
+            "bookie_prob": "bookie_win"
+        }
     )
 
     # =================================================================
