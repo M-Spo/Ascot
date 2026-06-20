@@ -200,7 +200,11 @@ if len(valid_field_runners) >= 2:
             st.error("🚨 Missing production asset dependencies.")
         else:
             processing_df = edited_matrix_df.copy()
-            model_expected_features = model.feature_name_
+            
+            try:
+                model_expected_features = model.feature_name_
+            except AttributeError:
+                model_expected_features = model.booster_.feature_name()
             
             # Pad out missing expected tracking features dynamically
             for col in model_expected_features:
@@ -218,24 +222,24 @@ if len(valid_field_runners) >= 2:
                     if idx < len(raw_cats):
                         cat_map[col_name] = raw_cats[idx]
 
-            # Process clean types for the model booster
+            # Process clean types safely without corrupting categorical definitions
             for col in matrix_inference_ready.columns:
                 if col in cat_map:
                     from pandas.api.types import CategoricalDtype
-                    # Re-align with historical training values
                     matrix_inference_ready[col] = matrix_inference_ready[col].astype(CategoricalDtype(categories=cat_map[col]))
                 elif matrix_inference_ready[col].dtype == 'object':
-                    # Fallback handling for unmapped string columns
                     matrix_inference_ready[col] = matrix_inference_ready[col].astype('category')
                 else:
                     matrix_inference_ready[col] = pd.to_numeric(matrix_inference_ready[col], errors='coerce').fillna(0.5)
             
-            # ⚡ FIX: Use raw matrix/numpy formatting directly with LightGBM to skip structural validation mismatch exceptions
-            try:
-                raw_model_predictions = model.booster_.predict(matrix_inference_ready)
-            except ValueError:
-                # Fallback directly to underlying arrays when custom text categories mismatch training definitions
-                raw_model_predictions = model.predict(matrix_inference_ready)
+            # ⚡ FIXED BYPASS: Convert string categories to categorical integer codes
+            # before passing data down directly to the booster. This skips dataframe validation errors entirely.
+            for col in matrix_inference_ready.columns:
+                if isinstance(matrix_inference_ready[col].dtype, pd.CategoricalDtype) or matrix_inference_ready[col].dtype.name == 'category':
+                    matrix_inference_ready[col] = matrix_inference_ready[col].cat.codes
+            
+            # Use raw underlying matrix calculation block
+            raw_model_predictions = model.booster_.predict(matrix_inference_ready.values)
             
             scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
             exponential_values = np.exp(scaled_logits)
