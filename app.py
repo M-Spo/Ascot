@@ -72,8 +72,8 @@ race_rating_band = st.sidebar.selectbox("Rating Band", rating_options)
 # =====================================================================
 # 4. SESSION STATE
 # =====================================================================
-if "runners" not in st.session_state:
-    st.session_state.runners = [{"horse": "", "jockey": ""}]
+if "num_runners" not in st.session_state:
+    st.session_state.num_runners = 3
 
 if "matrix_ready" not in st.session_state:
     st.session_state.matrix_ready = False
@@ -82,62 +82,87 @@ if "matrix_df" not in st.session_state:
     st.session_state.matrix_df = None
 
 # =====================================================================
-# 5. SMART SEARCH (3+ CHAR AUTOCOMPLETE)
+# 5. RUNNER SELECTOR (YOUR VERSION, STABILISED)
 # =====================================================================
-def smart_search(label, options, key):
-    typed = st.text_input(label, key=f"text_{key}")
+st.header("📋 Field Entry Profile Selection")
 
-    if len(typed) < 3:
-        st.caption("Type at least 3 letters to search...")
-        return ""
+col_add, col_rem, _ = st.columns([1, 1, 4])
 
-    filtered = [x for x in options if typed.lower() in x.lower()]
+with col_add:
+    if st.button("➕ Add Runner Position"):
+        st.session_state.num_runners += 1
 
-    if len(filtered) == 0:
-        st.warning("No matches found")
-        return ""
+with col_rem:
+    if st.button("❌ Remove Last Position") and st.session_state.num_runners > 2:
+        st.session_state.num_runners -= 1
 
-    return st.selectbox("Select", filtered, key=key)
+# ⚡ PRECOMPUTE LOWERCASE LOOKUP (speed fix)
+all_horses_lc = [(h, h.lower()) for h in all_horses]
+all_jockeys_lc = [(j, j.lower()) for j in all_jockeys]
+
+runners_input_list = []
+
+for i in range(st.session_state.num_runners):
+
+    st.markdown(f"**Runner Position #{i+1}**")
+    r_col1, r_col2 = st.columns(2)
+
+    # ============================
+    # HORSE SEARCH
+    # ============================
+    with r_col1:
+
+        h_search = st.text_input(
+            "Type Horse (min 2–3 letters)",
+            key=f"horse_search_{i}"
+        ).strip().lower()
+
+        if len(h_search) >= 3:
+            filtered_horses = [h for h, hl in all_horses_lc if h_search in hl]
+            h_name = st.selectbox(
+                "Select Horse",
+                [""] + filtered_horses,
+                key=f"horse_input_{i}"
+            )
+        else:
+            h_name = st.selectbox(
+                "Select Horse",
+                [""],
+                key=f"horse_input_{i}"
+            )
+
+    # ============================
+    # JOCKEY SEARCH
+    # ============================
+    with r_col2:
+
+        j_search = st.text_input(
+            "Type Jockey (min 2–3 letters)",
+            key=f"jockey_search_{i}"
+        ).strip().lower()
+
+        if len(j_search) >= 3:
+            filtered_jockeys = [j for j, jl in all_jockeys_lc if j_search in jl]
+            j_name = st.selectbox(
+                "Select Jockey",
+                [""] + filtered_jockeys,
+                key=f"jockey_input_{i}"
+            )
+        else:
+            j_name = st.selectbox(
+                "Select Jockey",
+                [""],
+                key=f"jockey_input_{i}"
+            )
+
+    runners_input_list.append({"horse": h_name, "jockey": j_name})
 
 # =====================================================================
-# 6. RUNNER INPUT (NO HEAVY LOAD)
-# =====================================================================
-st.header("📋 Enter Runners")
-
-c1, c2 = st.columns(2)
-
-with c1:
-    if st.button("➕ Add Runner"):
-        st.session_state.runners.append({"horse": "", "jockey": ""})
-
-with c2:
-    if st.button("➖ Remove Runner"):
-        if len(st.session_state.runners) > 1:
-            st.session_state.runners.pop()
-
-for i, r in enumerate(st.session_state.runners):
-    col1, col2 = st.columns(2)
-
-    with col1:
-        r["horse"] = smart_search(
-            "Horse (type 3+ letters)",
-            all_horses,
-            f"horse_{i}"
-        )
-
-    with col2:
-        r["jockey"] = smart_search(
-            "Jockey (type 3+ letters)",
-            all_jockeys,
-            f"jockey_{i}"
-        )
-
-# =====================================================================
-# 7. BUILD MATRIX
+# 6. BUILD MATRIX
 # =====================================================================
 if st.button("🚀 Build Feature Matrix"):
 
-    valid = [r for r in st.session_state.runners if r["horse"] and r["jockey"]]
+    valid = [r for r in runners_input_list if r["horse"] and r["jockey"]]
 
     if len(valid) < 2:
         st.error("Need at least 2 valid runners")
@@ -180,7 +205,7 @@ if st.button("🚀 Build Feature Matrix"):
     st.success("Feature matrix built")
 
 # =====================================================================
-# 8. MATRIX DISPLAY
+# 7. MATRIX DISPLAY
 # =====================================================================
 if st.session_state.matrix_ready:
 
@@ -192,7 +217,7 @@ if st.session_state.matrix_ready:
     )
 
     # =================================================================
-    # 9. MODEL EVALUATION (YOUR ORIGINAL LOGIC KEPT)
+    # 8. MODEL EVALUATION (YOUR ODDS LOGIC PRESERVED)
     # =================================================================
     if st.button("🔮 Evaluate Competitor Field Ranks"):
 
@@ -238,7 +263,7 @@ else:
     st.info("Build feature matrix first.")
 
 # =====================================================================
-# 10. BOOKIE ODDS CONVERTER
+# 9. BOOKIE ODDS CONVERTER
 # =====================================================================
 st.markdown("---")
 st.header("🧮 Bookie Fraction Converter")
