@@ -137,7 +137,7 @@ for i in range(st.session_state.num_runners):
     runners_input_list.append({"horse": h_name, "jockey": j_name})
 
 # =====================================================================
-# 6. BUILD MATRIX
+# 6. BUILD MATRIX (GUARANTEED COLUMNS FOR MANUAL INPUT)
 # =====================================================================
 if st.button("🚀 Build Feature Matrix"):
 
@@ -151,34 +151,48 @@ if st.button("🚀 Build Feature Matrix"):
 
     for r in valid:
         h, j = r["horse"], r["jockey"]
-        row = {"horse": h, "jockey": j}
+        
+        # ⚡ FIX: Explicitly pre-define every single column header so they 
+        # are guaranteed to appear in a clean, predictable trackside order.
+        row = {
+            "horse": h,
+            "jockey": j,
+            "rating_band": race_rating_band,
+            "ran": race_ran,
+            "age": np.nan,         # Blank slot waiting for your manual input
+            "wgt": np.nan,         # Blank slot waiting for your manual input
+            "or": np.nan,          # Blank slot waiting for your manual input
+            "bookie_prob": np.nan, # Blank slot waiting for your manual input
+            "prev_avg_performance": np.nan,
+            "horse_hot_streak": np.nan,
+            "historical_going_performance": np.nan,
+            "jockey_prev_avg_performance": np.nan,
+            "jockey_hot_streak": np.nan
+        }
 
+        # Pull historical values from database if the competitor exists
         if h in horse_lookup.index:
             hr = horse_lookup.loc[h]
+            
+            if "prev_avg_performance" in hr:
+                row["prev_avg_performance"] = hr["prev_avg_performance"]
+            if "horse_hot_streak" in hr:
+                row["horse_hot_streak"] = hr["horse_hot_streak"]
 
-            for col in ["age", "wgt", "or", "prev_avg_performance", "horse_hot_streak"]:
-                if col in hr:
-                    row[col] = hr[col]
-
-            # ⚡ FIXED: Explicitly check inside cells to prevent the None/NaN leak
+            # Robust going lookup fallback logic
             go_col = f"prev_{today_going}_performance"
             if go_col in hr and pd.notna(hr[go_col]):
                 row["historical_going_performance"] = hr[go_col]
             elif "prev_avg_performance" in hr and pd.notna(hr["prev_avg_performance"]):
                 row["historical_going_performance"] = hr["prev_avg_performance"]
-            else:
-                row["historical_going_performance"] = np.nan
 
         if j in jockey_lookup.index:
             jr = jockey_lookup.loc[j]
-
-            for col in ["jockey_prev_avg_performance", "jockey_hot_streak"]:
-                if col in jr:
-                    row[col] = jr[col]
-
-        row["rating_band"] = race_rating_band
-        row["ran"] = race_ran
-        row["bookie_prob"] = np.nan
+            
+            if "jockey_prev_avg_performance" in jr:
+                row["jockey_prev_avg_performance"] = jr["jockey_prev_avg_performance"]
+            if "jockey_hot_streak" in jr:
+                row["jockey_hot_streak"] = jr["jockey_hot_streak"]
 
         rows.append(row)
 
