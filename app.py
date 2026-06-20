@@ -3,270 +3,205 @@ import pandas as pd
 import numpy as np
 import joblib
 
-# Set mobile-friendly wide configuration layout
 st.set_page_config(page_title="Ascot Multi-Horse Ranker", layout="wide")
 
 # =====================================================================
-# 1. ASSET LOADING (WITH CACHING AND 3-WAY SPLIT RECONSTRUCTION)
+# 1. LOAD ASSETS (CACHE)
 # =====================================================================
 @st.cache_resource
 def load_production_assets():
     try:
         model = joblib.load('lgbm_ranker_model.pkl')
-        
-        # Load all three compressed fragments
+
         part1 = pd.read_csv('historical_lookup_part1.zip')
         part2 = pd.read_csv('historical_lookup_part2.zip')
         part3 = pd.read_csv('historical_lookup_part3.zip')
-        
-        # Stitch them back into a single master lookup dataframe
+
         lookup = pd.concat([part1, part2, part3], ignore_index=True)
         return model, lookup
     except Exception as e:
-        st.error(f"⚠️ Error loading or reconstructing asset files: {e}")
+        st.error(f"Asset load error: {e}")
         return None, None
+
 
 model, lookup = load_production_assets()
 
-# Pre-process unique sorted lists and fast indexed dictionary mappings
+# =====================================================================
+# PREPROCESS LOOKUPS (RUN ONCE)
+# =====================================================================
 if lookup is not None:
-    # ⚡ SPEED FIX: Clean whitespaces once across the dataframe
-    if 'horse' in lookup.columns:
-        lookup['horse'] = lookup['horse'].astype(str).str.strip()
-    if 'jockey' in lookup.columns:
-        lookup['jockey'] = lookup['jockey'].astype(str).str.strip()
+    lookup['horse'] = lookup['horse'].astype(str).str.strip()
+    lookup['jockey'] = lookup['jockey'].astype(str).str.strip()
 
     all_horses = sorted(lookup['horse'].dropna().unique())
     all_jockeys = sorted(lookup['jockey'].dropna().unique())
-    
-    # ⚡ SPEED FIX: Convert lookups into indexed structures for instantaneous row extraction
-    # This prevents the app from scanning the full dataframe inside the runner loop
-    horse_fast_lookup = lookup.drop_duplicates(subset=['horse']).set_index('horse')
-    jockey_fast_lookup = lookup.drop_duplicates(subset=['jockey']).set_index('jockey')
-    
-    # Extract historical going types dynamically from dataset column names
-    going_cols = [col for col in lookup.columns if col.startswith('prev_') and col.endswith('_performance')]
-    unique_goings_list = [col.replace('prev_', '').replace('_performance', '') for col in going_cols]
+
+    horse_fast_lookup = lookup.drop_duplicates('horse').set_index('horse')
+    jockey_fast_lookup = lookup.drop_duplicates('jockey').set_index('jockey')
+
+    going_cols = [c for c in lookup.columns if c.startswith('prev_') and c.endswith('_performance')]
+    unique_goings_list = [c.replace('prev_', '').replace('_performance', '') for c in going_cols]
+
     if not unique_goings_list:
         unique_goings_list = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
-        
-    if 'rating_band' in lookup.columns:
-        all_rating_bands = sorted(lookup['rating_band'].dropna().astype(str).str.strip().unique())
-    else:
-        all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
 else:
-    all_horses = []
-    all_jockeys = []
-    all_rating_bands = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"]
-    unique_goings_list = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
+    all_horses, all_jockeys = [], []
     horse_fast_lookup = pd.DataFrame()
     jockey_fast_lookup = pd.DataFrame()
+    unique_goings_list = ["Good", "Good to Firm", "Good to Soft", "Soft", "Heavy"]
 
 # =====================================================================
-# 2. RACE CONFIGURATION (SIDEBAR REPLACEMENT WITH AUTOCOMPLETE)
+# SIDEBAR CONFIG
 # =====================================================================
-st.sidebar.header("⚙️ Race Day Configuration")
+st.sidebar.header("⚙️ Race Config")
 
-# Track Going is back to calculate 'historical_going_performance'
-today_going = st.sidebar.selectbox("Track Going Status", unique_goings_list)
+today_going = st.sidebar.selectbox("Going", unique_goings_list)
+race_ran = st.sidebar.number_input("Runners", value=8, step=1)
 
-# Rating Band autocomplete
-race_rating_band = st.sidebar.selectbox(
-    "Search Rating Band", 
-    options=[""] + all_rating_bands, 
-    index=1 if len(all_rating_bands) > 0 else 0
-).strip()
-
-race_ran = st.sidebar.number_input("Total Runners (ran)", value=8, step=1)
+# rating band optional
+race_rating_band = st.sidebar.selectbox("Rating Band", [""] + sorted(lookup['rating_band'].dropna().astype(str).unique()) if lookup is not None else [""])
 
 # =====================================================================
-# 3. RUNNER SELECTOR SECTION
+# SESSION STATE INIT
 # =====================================================================
-st.header("📋 Field Entry Profile Selection")
+if "runners" not in st.session_state:
+    st.session_state.runners = [{"horse": "", "jockey": ""}]
 
-if 'num_runners' not in st.session_state:
-    st.session_state.num_runners = 3
+if "matrix_ready" not in st.session_state:
+    st.session_state.matrix_ready = False
 
-col_add, col_rem, _ = st.columns([1, 1, 4])
+if "matrix_df" not in st.session_state:
+    st.session_state.matrix_df = None
+
+# =====================================================================
+# RUNNER INPUT (LIGHTWEIGHT ONLY)
+# =====================================================================
+st.header("📋 Enter Runners (No Processing Yet)")
+
+col_add, col_rem = st.columns(2)
+
 with col_add:
-    if st.button("➕ Add Runner Position"):
-        st.session_state.num_runners += 1
+    if st.button("➕ Add Runner"):
+        st.session_state.runners.append({"horse": "", "jockey": ""})
+
 with col_rem:
-    if st.button("❌ Remove Last Position") and st.session_state.num_runners > 2:
-        st.session_state.num_runners -= 1
+    if st.button("➖ Remove Runner") and len(st.session_state.runners) > 1:
+        st.session_state.runners.pop()
 
-runners_input_list = []
-for i in range(st.session_state.num_runners):
-    st.markdown(f"**Runner Position #{i+1}**")
-    r_col1, r_col2 = st.columns(2)
-    
-    with r_col1:
-        h_name = st.selectbox(f"Search Horse Name", options=[""] + all_horses, index=0, key=f"horse_input_{i}").strip()
-    with r_col2:
-        j_name = st.selectbox(f"Search Jockey Name", options=[""] + all_jockeys, index=0, key=f"jockey_input_{i}").strip()
-        
-    runners_input_list.append({"horse": h_name, "jockey": j_name})
+# input UI only
+for i, r in enumerate(st.session_state.runners):
+    c1, c2 = st.columns(2)
+
+    with c1:
+        r["horse"] = st.selectbox(
+            "Horse",
+            [""] + all_horses,
+            key=f"h_{i}"
+        ).strip()
+
+    with c2:
+        r["jockey"] = st.selectbox(
+            "Jockey",
+            [""] + all_jockeys,
+            key=f"j_{i}"
+        ).strip()
 
 # =====================================================================
-# 4. INTERACTIVE FEATURE COMPILATION TABLE
+# STEP 1 BUTTON → BUILD MATRIX ONLY
 # =====================================================================
-valid_field_runners = [r for r in runners_input_list if r["horse"] and r["jockey"]]
+if st.button("🚀 Build Feature Matrix"):
+    valid = [r for r in st.session_state.runners if r["horse"] and r["jockey"]]
 
-if len(valid_field_runners) >= 2:
-    st.header("📊 Race Feature Matrix Verification")
-    st.write("Review features below. **Blanks are highlighted in red**—type overrides or missing values directly into cells.")
-    
-    feature_cols = [
-        'horse', 'jockey', 'rating_band', 'ran', 'age', 'wgt', 'or', 'bookie_prob',
-        'prev_avg_performance', 'horse_hot_streak', 'jockey_prev_avg_performance',
-        'jockey_hot_streak', 'historical_going_performance'
-    ]
-    
-    compiled_rows = []
-    for runner in valid_field_runners:
-        h_name = runner["horse"]
-        j_name = runner["jockey"]
-        
-        row_data = {'horse': h_name, 'jockey': j_name}
-        
-        # Pull horse records instantly using the fast index lookup matrix
-        if h_name in horse_fast_lookup.index:
-            h_row = horse_fast_lookup.loc[h_name]
-            for col in ['age', 'wgt', 'or', 'prev_avg_performance', 'horse_hot_streak']:
-                if col in h_row.index:
-                    row_data[col] = h_row[col]
-            
-            # Use the Track Going selection to dynamically set historical_going_performance
-            target_going_col = f"prev_{today_going}_performance"
-            
-            if target_going_col in h_row.index and pd.notna(h_row[target_going_col]):
-                row_data['historical_going_performance'] = h_row[target_going_col]
-            else:
-                row_data['historical_going_performance'] = h_row.get('prev_avg_performance', np.nan)
-                    
-        # Pull jockey records instantly using the fast index lookup matrix
-        if j_name in jockey_fast_lookup.index:
-            j_row = jockey_fast_lookup.loc[j_name]
-            for col in ['jockey_prev_avg_performance', 'jockey_hot_streak']:
-                if col in j_row.index:
-                    row_data[col] = j_row[col]
-                    
-        # Global inputs
-        row_data['rating_band'] = race_rating_band
-        row_data['ran'] = race_ran
-        row_data['bookie_prob'] = np.nan
-            
-        for col in feature_cols:
-            if col not in row_data:
-                row_data[col] = np.nan
-                
-        filtered_row = {col: row_data[col] for col in feature_cols}
-        compiled_rows.append(filtered_row)
-        
-    initial_matrix_df = pd.DataFrame(compiled_rows)
-    
-    def highlight_missing(val):
-        if pd.isna(val) or val == "" or val is None:
-            return 'background-color: #ffcccc; color: black;'
-        return ''
-        
-    styled_df = initial_matrix_df.style.map(
-        highlight_missing, 
-        subset=[c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band', 'ran']]
-    )
-    
-    editor_key = f"matrix_editor_{today_going}_{race_rating_band}_{len(valid_field_runners)}"
-    
-    # Render with custom column display configuration alias
-    edited_matrix_df = st.data_editor(
-        styled_df,
-        use_container_width=True,
-        disabled=["horse", "jockey", "rating_band", "ran"],
-        column_config={
-            "wgt": "carry_wgt(lbs)",
-            "bookie_prob" : "bookie_win"
-        },
-        key=editor_key
+    if len(valid) < 2:
+        st.error("Need at least 2 valid runners")
+    else:
+        rows = []
+
+        for runner in valid:
+            h, j = runner["horse"], runner["jockey"]
+            row = {"horse": h, "jockey": j}
+
+            if h in horse_fast_lookup.index:
+                hrow = horse_fast_lookup.loc[h]
+
+                for col in ['age', 'wgt', 'or', 'prev_avg_performance', 'horse_hot_streak']:
+                    if col in hrow:
+                        row[col] = hrow[col]
+
+                go_col = f"prev_{today_going}_performance"
+                row["historical_going_performance"] = (
+                    hrow.get(go_col, hrow.get("prev_avg_performance", np.nan))
+                )
+
+            if j in jockey_fast_lookup.index:
+                jrow = jockey_fast_lookup.loc[j]
+                for col in ['jockey_prev_avg_performance', 'jockey_hot_streak']:
+                    if col in jrow:
+                        row[col] = jrow[col]
+
+            row["rating_band"] = race_rating_band
+            row["ran"] = race_ran
+            row["bookie_prob"] = np.nan
+
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+        st.session_state.matrix_df = df
+        st.session_state.matrix_ready = True
+
+        st.success("Matrix built successfully")
+
+# =====================================================================
+# SHOW MATRIX ONLY AFTER BUILD
+# =====================================================================
+if st.session_state.matrix_ready:
+
+    st.header("📊 Feature Matrix")
+
+    edited = st.data_editor(
+        st.session_state.matrix_df,
+        use_container_width=True
     )
 
-    # =====================================================================
-    # 5. MATH INFERENCE AND FORECAST LEADERBOARD
-    # =====================================================================
-    if st.button("🔮 Evaluate Competitor Field Ranks"):
+    st.session_state.matrix_df = edited
+
+    # =================================================================
+    # STEP 2 BUTTON → MODEL RUN
+    # =================================================================
+    if st.button("🔮 Evaluate Field"):
+
         if model is None:
-            st.error("🚨 Missing production asset dependencies.")
+            st.error("Model missing")
         else:
-            processing_df = edited_matrix_df.copy()
-            
-            numeric_cols = [c for c in feature_cols if c not in ['horse', 'jockey', 'rating_band']]
-            for col in numeric_cols:
-                processing_df[col] = pd.to_numeric(processing_df[col]).fillna(0.5)
-                
-            model_expected_features = model.feature_name_
-            
-            for col in model_expected_features:
-                if col not in processing_df.columns:
-                    processing_df[col] = 0.5
-                    
-            matrix_inference_ready = processing_df[model_expected_features].copy()
-            
-            # Formats categories and objects securely for scikit-learn/LGBM
-            for col in matrix_inference_ready.columns:
-                if matrix_inference_ready[col].dtype == 'object' or isinstance(matrix_inference_ready[col].iloc[0], str):
-                    matrix_inference_ready[col] = matrix_inference_ready[col].astype('category')
+            df = st.session_state.matrix_df.copy()
+
+            model_features = model.feature_name_
+
+            for c in model_features:
+                if c not in df.columns:
+                    df[c] = 0.5
+
+            X = df[model_features].copy()
+
+            for c in X.columns:
+                if X[c].dtype == "object":
+                    X[c] = X[c].astype("category")
                 else:
-                    matrix_inference_ready[col] = pd.to_numeric(matrix_inference_ready[col], errors='coerce').fillna(0.5)
-            
-            raw_model_predictions = model.booster_.predict(matrix_inference_ready)
-            
-            scaled_logits = raw_model_predictions - np.max(raw_model_predictions)
-            exponential_values = np.exp(scaled_logits)
-            win_probabilities_distribution = exponential_values / np.sum(exponential_values)
-            
-            placing_scale_factor = min(3.0, len(valid_field_runners))
-            top3_probabilities_distribution = np.clip(win_probabilities_distribution * placing_scale_factor, 0.0, 0.99)
-            
-            display_names = [f"{r['horse'].upper()} / {r['jockey']}" for _, r in processing_df.iterrows()]
-            leaderboard_df = pd.DataFrame({
-                "🎯 Predicted Rank": 0,
-                "Competitor Setup (Horse / Jockey)": display_names,
-                "Win Probability (#1)": [f"{p*100:.1f}%" for p in win_probabilities_distribution],
-                "Top 3 Place Probability": [f"{p*100:.1f}%" for p in top3_probabilities_distribution],
-                "_sorting_metric": win_probabilities_distribution  
-            })
-            
-            leaderboard_df = leaderboard_df.sort_values(by="_sorting_metric", ascending=False).reset_index(drop=True)
-            leaderboard_df["🎯 Predicted Rank"] = leaderboard_df.index + 1
-            leaderboard_df = leaderboard_df.drop(columns=["_sorting_metric"])
-            
-            st.subheader("🏁 Official Model Forecast Leaderboard")
-            st.dataframe(leaderboard_df, use_container_width=True)
+                    X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.5)
+
+            preds = model.booster_.predict(X)
+
+            probs = np.exp(preds - np.max(preds))
+            probs = probs / np.sum(probs)
+
+            df["Win %"] = [f"{p*100:.1f}%" for p in probs]
+
+            df = df.sort_values(probs, ascending=False)
+
+            df["Rank"] = range(1, len(df) + 1)
+
+            st.subheader("🏁 Leaderboard")
+            st.dataframe(df)
 
 else:
-    st.info("💡 Please pick at least 2 autocomplete runner pairs above to generate the interactive feature spreadsheet.")
-
-# =====================================================================
-# 6. FRACTION ODDS TO PROBABILITY PERCENTAGE CONVERTER
-# =====================================================================
-st.markdown("---")
-st.header("🧮 Bookie Fraction Converter")
-st.write("Type in the bookmaker fractional odds (e.g., **4 / 1** or **13 / 8**) to quickly get the probability value for your table.")
-
-calc_col1, calc_col2, calc_col3 = st.columns([2, 1, 3])
-
-with calc_col1:
-    numerator = st.number_input("Numerator (Top Number)", value=4, min_value=1, step=1, key="calc_num")
-with calc_col2:
-    st.markdown("<h3 style='text-align: center; margin-top: 25px;'>/</h3>", unsafe_allow_html=True)
-with calc_col3:
-    denominator = st.number_input("Denominator (Bottom Number)", value=1, min_value=1, step=1, key="calc_den")
-
-# Probability math execution
-implied_prob_decimal = denominator / (numerator + denominator)
-implied_prob_percentage = implied_prob_decimal * 100
-
-st.metric(
-    label="⚡ Target Value for 'bookie_prob' Column", 
-    value=f"{implied_prob_decimal:.3f}  ({implied_prob_percentage:.1f}%)",
-    help="Plug the decimal value directly into the red 'bookie_prob' row cells above."
-)
+    st.info("Build matrix first before running model.")
